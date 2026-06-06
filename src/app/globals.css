@@ -1,26 +1,74 @@
 @import "tailwindcss";
 
 :root {
+  color-scheme: light;
   --background: #ffffff;
-  --foreground: #171717;
+  --foreground: #0a0a0a;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --background: #000000;
+    --foreground: #f5f5f5;
+  }
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: var(--font-geist-sans), system-ui, sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html,
+body {
+  height: 100%;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans);
+}
+
+/* One consistent input style: a surface colour + its opposite text colour,
+   in both light and dark. Only the border/ring change on focus. */
+.field {
+  width: 100%;
+  border-radius: 0.75rem;
+  border: 1px solid #d4d4d4;
+  background: #ffffff;
+  color: #0a0a0a;
+  padding: 0.65rem 0.9rem;
+  font-size: 15px;
+  outline: none;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+.field::placeholder {
+  color: #9ca3af;
+}
+.field:focus {
+  border-color: #8b5cf6;
+  box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.25);
+}
+@media (prefers-color-scheme: dark) {
+  .field {
+    border-color: #3f3f46;
+    background: #1c1c1f;
+    color: #f5f5f5;
+  }
+  .field::placeholder {
+    color: #6b7280;
+  }
+}
+
+/* Hide scrollbars in the chat thread but keep scrolling. */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
 }
