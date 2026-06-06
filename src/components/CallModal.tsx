@@ -60,7 +60,7 @@ export default function CallModal({
             ref={remoteRef}
             autoPlay
             playsInline
-            className="h-full w-full rounded-2xl object-cover"
+            className="h-full w-full rounded-2xl bg-black object-contain"
           />
         ) : (
           <div className="flex flex-col items-center gap-4">
@@ -78,7 +78,7 @@ export default function CallModal({
             autoPlay
             playsInline
             muted
-            className="absolute bottom-3 right-3 h-36 w-24 rounded-xl object-cover shadow-lg"
+            className="absolute bottom-3 right-3 h-32 w-28 rounded-xl bg-black object-contain shadow-lg"
           />
         )}
       </div>
