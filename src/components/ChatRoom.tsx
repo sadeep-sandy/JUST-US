@@ -232,7 +232,7 @@ export default function ChatRoom({
     callStatus === "connected";
 
   return (
-    <div className="mx-auto flex h-dvh w-full max-w-2xl flex-col bg-white dark:bg-neutral-950">
+    <div className="mx-auto flex h-dvh w-full max-w-2xl flex-col overflow-hidden bg-white dark:bg-neutral-950">
       <ChatHeader
         partnerName={partnerName}
         online={online}
@@ -241,7 +241,7 @@ export default function ChatRoom({
         onVideoCall={() => startCall(true)}
       />
 
-      <div className="no-scrollbar flex-1 space-y-2 overflow-y-auto px-4 py-4">
+      <div className="no-scrollbar min-h-0 flex-1 space-y-2 overflow-y-auto px-4 py-4">
         {messages.length === 0 && (
           <div className="flex h-full flex-col items-center justify-center text-center text-neutral-400">
             <div className="mb-3 grid h-20 w-20 place-items-center rounded-full bg-gradient-to-br from-fuchsia-500 to-violet-500 text-3xl text-white">

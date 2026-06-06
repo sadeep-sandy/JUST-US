@@ -45,6 +45,9 @@ export class CallManager {
   private localStream: MediaStream | null = null;
   private pendingOffer: { sdp: RTCSessionDescriptionInit; video: boolean } | null =
     null;
+  // ICE candidates that arrive before the remote description is set are
+  // queued here, then applied once it is — otherwise calls fail to connect.
+  private pendingCandidates: RTCIceCandidateInit[] = [];
   private cb: CallCallbacks;
 
   constructor(cb: CallCallbacks) {
@@ -109,10 +112,24 @@ export class CallManager {
     const stream = await this.getMedia(video);
     stream.getTracks().forEach((t) => pc.addTrack(t, stream));
     await pc.setRemoteDescription(new RTCSessionDescription(sdp));
+    await this.flushCandidates();
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
     this.cb.send({ kind: "answer", sdp: answer });
     this.pendingOffer = null;
+  }
+
+  private async flushCandidates() {
+    if (!this.pc) return;
+    const queued = this.pendingCandidates;
+    this.pendingCandidates = [];
+    for (const c of queued) {
+      try {
+        await this.pc.addIceCandidate(new RTCIceCandidate(c));
+      } catch {
+        // ignore bad candidate
+      }
+    }
   }
 
   // Handle a signaling message received from the partner.
@@ -128,15 +145,19 @@ export class CallManager {
           await this.pc.setRemoteDescription(
             new RTCSessionDescription(signal.sdp)
           );
+          await this.flushCandidates();
         }
         break;
       case "ice":
-        if (this.pc) {
+        // Apply immediately if the connection is ready, otherwise queue it.
+        if (this.pc && this.pc.remoteDescription) {
           try {
             await this.pc.addIceCandidate(new RTCIceCandidate(signal.candidate));
           } catch {
-            // Candidate may arrive before remote description; safe to ignore.
+            // ignore bad candidate
           }
+        } else {
+          this.pendingCandidates.push(signal.candidate);
         }
         break;
       case "end":
@@ -171,6 +192,7 @@ export class CallManager {
     this.localStream?.getTracks().forEach((t) => t.stop());
     this.localStream = null;
     this.pendingOffer = null;
+    this.pendingCandidates = [];
     if (this.pc) {
       this.pc.onicecandidate = null;
       this.pc.ontrack = null;
