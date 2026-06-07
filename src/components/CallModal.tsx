@@ -31,6 +31,33 @@ export default function CallModal({
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const [muted, setMuted] = useState(false);
   const [camOff, setCamOff] = useState(false);
+  // Voice calls default to speaker (web default); video calls default to speaker too.
+  const [speaker, setSpeaker] = useState(true);
+
+  // Best-effort output routing: tries to switch the remote audio between the
+  // loudspeaker and the earpiece. Works where the browser exposes outputs.
+  async function applySpeaker(on: boolean) {
+    setSpeaker(on);
+    const el = remoteAudioRef.current as
+      | (HTMLAudioElement & { setSinkId?: (id: string) => Promise<void> })
+      | null;
+    if (!el || typeof el.setSinkId !== "function") return;
+    try {
+      if (on) {
+        await el.setSinkId("");
+      } else {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const ear = devices.find(
+          (d) =>
+            d.kind === "audiooutput" &&
+            /ear|receiver|communication/i.test(d.label)
+        );
+        await el.setSinkId(ear ? ear.deviceId : "default");
+      }
+    } catch {
+      // Routing not supported on this device — toggle is visual only.
+    }
+  }
 
   useEffect(() => {
     if (localRef.current && localStream) localRef.current.srcObject = localStream;
@@ -127,6 +154,15 @@ export default function CallModal({
             >
               <MicIcon off={muted} />
             </button>
+            <button
+              onClick={() => applySpeaker(!speaker)}
+              className={`grid h-14 w-14 place-items-center rounded-full transition ${
+                speaker ? "bg-white text-neutral-900" : "bg-white/15 text-white hover:bg-white/25"
+              }`}
+              aria-label={speaker ? "Speaker on" : "Speaker off"}
+            >
+              <SpeakerIcon off={!speaker} />
+            </button>
             {video && (
               <button
                 onClick={() => setCamOff(onToggleCamera())}
@@ -181,6 +217,25 @@ function CameraIcon({ off = false }: { off?: boolean }) {
       <path d="M23 7l-7 5 7 5V7z" />
       <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
       {off && <line x1="2" y1="2" x2="22" y2="22" />}
+    </svg>
+  );
+}
+
+function SpeakerIcon({ off = false }: { off?: boolean }) {
+  return (
+    <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+      {off ? (
+        <>
+          <line x1="23" y1="9" x2="17" y2="15" />
+          <line x1="17" y1="9" x2="23" y2="15" />
+        </>
+      ) : (
+        <>
+          <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+          <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
+        </>
+      )}
     </svg>
   );
 }
