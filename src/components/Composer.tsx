@@ -1,8 +1,8 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { uploadMedia } from "@/lib/storage";
-import type { MessageKind } from "@/lib/types";
+import type { Message, MessageKind } from "@/lib/types";
 
 interface Props {
   coupleId: string;
@@ -10,11 +10,43 @@ interface Props {
     kind: MessageKind;
     body?: string | null;
     media_path?: string | null;
+    reply_to?: string | null;
   }) => Promise<void> | void;
   onTyping: () => void;
+  replyingTo: Message | null;
+  editing: Message | null;
+  meId: string;
+  partnerName: string;
+  onCancelReply: () => void;
+  onCancelEdit: () => void;
+  onSubmitEdit: (newBody: string) => Promise<void> | void;
 }
 
-export default function Composer({ coupleId, onSend, onTyping }: Props) {
+function snippet(m: Message): string {
+  switch (m.kind) {
+    case "image":
+      return "📷 Photo";
+    case "audio":
+      return "🎙 Voice message";
+    case "file":
+      return "📎 " + (m.body || "File");
+    default:
+      return m.body || "";
+  }
+}
+
+export default function Composer({
+  coupleId,
+  onSend,
+  onTyping,
+  replyingTo,
+  editing,
+  meId,
+  partnerName,
+  onCancelReply,
+  onCancelEdit,
+  onSubmitEdit,
+}: Props) {
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
@@ -22,12 +54,21 @@ export default function Composer({ coupleId, onSend, onTyping }: Props) {
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
+  // When entering edit mode, prefill the box with the existing text.
+  useEffect(() => {
+    if (editing) setText(editing.body ?? "");
+  }, [editing]);
+
   async function submitText(e?: React.FormEvent) {
     e?.preventDefault();
     const body = text.trim();
     if (!body || busy) return;
     setText("");
-    await onSend({ kind: "text", body });
+    if (editing) {
+      await onSubmitEdit(body);
+      return;
+    }
+    await onSend({ kind: "text", body, reply_to: replyingTo?.id ?? null });
   }
 
   async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -87,10 +128,42 @@ export default function Composer({ coupleId, onSend, onTyping }: Props) {
     setRecording(false);
   }
 
+  const context = editing
+    ? { label: "Editing message", text: editing.body ?? "", cancel: onCancelEdit }
+    : replyingTo
+      ? {
+          label:
+            "Replying to " +
+            (replyingTo.sender_id === meId ? "yourself" : partnerName),
+          text: snippet(replyingTo),
+          cancel: onCancelReply,
+        }
+      : null;
+
   return (
+    <div className="border-t border-neutral-200 bg-white dark:border-neutral-800 dark:bg-neutral-950">
+      {context && (
+        <div className="flex items-center gap-2 px-4 pt-2">
+          <div className="min-w-0 flex-1 border-l-2 border-fuchsia-400 pl-2">
+            <p className="text-xs font-semibold text-fuchsia-500">{context.label}</p>
+            <p className="line-clamp-1 text-xs text-neutral-500">{context.text}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              context.cancel();
+              if (editing) setText("");
+            }}
+            aria-label="Cancel"
+            className="grid h-7 w-7 shrink-0 place-items-center rounded-full text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
+          >
+            ✕
+          </button>
+        </div>
+      )}
     <form
       onSubmit={submitText}
-      className="flex items-end gap-2 border-t border-neutral-200 bg-white px-3 py-2.5 dark:border-neutral-800 dark:bg-neutral-950"
+      className="flex items-end gap-2 px-3 py-2.5"
     >
       <input
         ref={fileRef}
@@ -161,5 +234,6 @@ export default function Composer({ coupleId, onSend, onTyping }: Props) {
         </button>
       )}
     </form>
+    </div>
   );
 }

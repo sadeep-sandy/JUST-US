@@ -25,6 +25,17 @@ export interface Message {
   media_path: string | null;
   created_at: string;
   read_at: string | null;
+  reply_to: string | null;
+  edited_at: string | null;
+  deleted_at: string | null;
+  expires_at: string | null;
+}
+
+export interface Reaction {
+  message_id: string;
+  user_id: string;
+  emoji: string;
+  created_at: string;
 }
 
 export interface Invite {
