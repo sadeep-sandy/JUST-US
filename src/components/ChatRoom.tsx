@@ -368,7 +368,8 @@ export default function ChatRoom({
   ).filter(notExpired);
 
   return (
-    <div className="mx-auto flex h-dvh w-full max-w-2xl flex-col overflow-hidden bg-white dark:bg-neutral-950">
+    <div className="fixed inset-0 z-0 flex justify-center bg-white dark:bg-neutral-950">
+    <div className="flex h-full w-full max-w-2xl flex-col overflow-hidden bg-white dark:bg-neutral-950">
       <ChatHeader
         partnerName={partnerName}
         partnerAvatar={partnerAvatar}
@@ -473,6 +474,7 @@ export default function ChatRoom({
           onToggleCamera={toggleCamera}
         />
       )}
+    </div>
     </div>
   );
 }
