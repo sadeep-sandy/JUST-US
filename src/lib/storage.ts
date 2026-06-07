@@ -22,6 +22,19 @@ export async function uploadMedia(
   return path;
 }
 
+// Upload a profile photo to the public 'avatars' bucket and return its URL.
+export async function uploadAvatar(userId: string, file: Blob): Promise<string> {
+  const supabase = createClient();
+  const ext = (file.type.split("/")[1] || "jpg").replace(/[^a-z0-9]/gi, "");
+  const path = `${userId}/${crypto.randomUUID()}.${ext}`;
+  const { error } = await supabase.storage.from("avatars").upload(path, file, {
+    contentType: file.type || "image/jpeg",
+    upsert: true,
+  });
+  if (error) throw error;
+  return supabase.storage.from("avatars").getPublicUrl(path).data.publicUrl;
+}
+
 // Create a short-lived signed URL to view a private media object.
 export async function getSignedUrl(
   path: string,

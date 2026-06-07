@@ -5,17 +5,26 @@ import Link from "next/link";
 
 interface Props {
   partnerName: string;
+  partnerAvatar: string | null;
   online: boolean;
   typing: boolean;
   lastSeen: string | null;
+  disappearSeconds: number;
+  onSetDisappear: (seconds: number) => void;
   onAudioCall: () => void;
   onVideoCall: () => void;
   onToggleSearch: () => void;
 }
 
+const DISAPPEAR_OPTIONS = [
+  { label: "Off", value: 0 },
+  { label: "1 hour", value: 3600 },
+  { label: "1 day", value: 86400 },
+  { label: "1 week", value: 604800 },
+];
+
 function lastSeenLabel(iso: string): string {
-  const then = new Date(iso).getTime();
-  const diff = Date.now() - then;
+  const diff = Date.now() - new Date(iso).getTime();
   const mins = Math.floor(diff / 60000);
   if (mins < 1) return "last seen just now";
   if (mins < 60) return `last seen ${mins}m ago`;
@@ -29,21 +38,22 @@ function lastSeenLabel(iso: string): string {
 
 export default function ChatHeader({
   partnerName,
+  partnerAvatar,
   online,
   typing,
   lastSeen,
+  disappearSeconds,
+  onSetDisappear,
   onAudioCall,
   onVideoCall,
   onToggleSearch,
 }: Props) {
   const initial = partnerName.charAt(0).toUpperCase();
-
-  // Render the dynamic status only after mount to avoid hydration mismatches
-  // (relative times differ between server and client).
   const [mounted, setMounted] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   useEffect(() => setMounted(true), []);
 
-  let status = " ";
+  let status = " ";
   if (mounted) {
     status = typing
       ? "typing…"
@@ -55,7 +65,7 @@ export default function ChatHeader({
   }
 
   return (
-    <header className="flex items-center gap-2 border-b border-neutral-200 bg-white px-2 py-2.5 dark:border-neutral-800 dark:bg-neutral-950">
+    <header className="relative flex items-center gap-2 border-b border-neutral-200 bg-white px-2 py-2.5 dark:border-neutral-800 dark:bg-neutral-950">
       <Link
         href="/chat"
         aria-label="Back to messages"
@@ -67,9 +77,14 @@ export default function ChatHeader({
       </Link>
 
       <div className="relative">
-        <div className="grid h-10 w-10 place-items-center rounded-full bg-gradient-to-br from-fuchsia-500 to-violet-500 font-semibold text-white">
-          {initial}
-        </div>
+        {partnerAvatar ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={partnerAvatar} alt="" className="h-10 w-10 rounded-full object-cover" />
+        ) : (
+          <div className="grid h-10 w-10 place-items-center rounded-full bg-gradient-to-br from-fuchsia-500 to-violet-500 font-semibold text-white">
+            {initial}
+          </div>
+        )}
         {online && (
           <span className="absolute bottom-0 right-0 h-3 w-3 rounded-full border-2 border-white bg-emerald-500 dark:border-neutral-950" />
         )}
@@ -84,6 +99,7 @@ export default function ChatHeader({
             typing ? "text-violet-500" : online ? "text-emerald-500" : "text-neutral-400"
           }`}
         >
+          {disappearSeconds > 0 && "⏳ "}
           {status}
         </p>
       </div>
@@ -107,6 +123,35 @@ export default function ChatHeader({
           <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
         </svg>
       </IconButton>
+
+      <IconButton label="More" onClick={() => setMenuOpen((o) => !o)}>
+        <svg viewBox="0 0 24 24" className="h-6 w-6" fill="currentColor">
+          <circle cx="12" cy="5" r="2" />
+          <circle cx="12" cy="12" r="2" />
+          <circle cx="12" cy="19" r="2" />
+        </svg>
+      </IconButton>
+
+      {menuOpen && (
+        <div className="absolute right-2 top-14 z-20 w-52 rounded-2xl border border-neutral-200 bg-white p-2 shadow-xl dark:border-neutral-700 dark:bg-neutral-900">
+          <p className="px-2 py-1 text-xs font-semibold text-neutral-400">
+            ⏳ Disappearing messages
+          </p>
+          {DISAPPEAR_OPTIONS.map((o) => (
+            <button
+              key={o.value}
+              onClick={() => {
+                onSetDisappear(o.value);
+                setMenuOpen(false);
+              }}
+              className="flex w-full items-center justify-between rounded-lg px-2 py-2 text-sm hover:bg-neutral-100 dark:hover:bg-neutral-800"
+            >
+              <span>{o.label}</span>
+              {disappearSeconds === o.value && <span className="text-fuchsia-500">✓</span>}
+            </button>
+          ))}
+        </div>
+      )}
     </header>
   );
 }

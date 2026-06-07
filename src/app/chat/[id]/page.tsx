@@ -29,7 +29,9 @@ export default async function ConversationPage({
       meId={convo.userId}
       partnerId={convo.partnerId}
       partnerName={convo.partnerName}
+      partnerAvatar={convo.partnerAvatar}
       partnerLastSeen={convo.partnerLastSeen}
+      disappearSeconds={convo.disappearSeconds}
       initialMessages={(messages as Message[]) ?? []}
     />
   );

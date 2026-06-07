@@ -33,7 +33,9 @@ export async function updateSession(request: NextRequest) {
   const path = request.nextUrl.pathname;
   const isAuthRoute = path.startsWith("/login") || path.startsWith("/signup");
   const isProtected =
-    path.startsWith("/chat") || path.startsWith("/pair");
+    path.startsWith("/chat") ||
+    path.startsWith("/pair") ||
+    path.startsWith("/settings");
 
   // Not signed in and trying to reach a protected page -> login.
   if (!user && isProtected) {

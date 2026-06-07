@@ -48,6 +48,7 @@ export interface ConversationSummary {
   id: string; // couple/conversation id
   partnerId: string;
   partnerName: string;
+  partnerAvatar: string | null;
   lastMessage: string | null;
   lastKind: MessageKind | null;
   lastAt: string | null;
@@ -82,10 +83,14 @@ export async function getConversations(): Promise<{
 
   const { data: profiles } = await supabase
     .from("profiles")
-    .select("id, display_name")
+    .select("id, display_name, avatar_url")
     .in("id", partnerIds);
   const nameById = new Map<string, string>();
-  (profiles ?? []).forEach((p) => nameById.set(p.id, p.display_name ?? "Friend"));
+  const avatarById = new Map<string, string | null>();
+  (profiles ?? []).forEach((p) => {
+    nameById.set(p.id, p.display_name ?? "Friend");
+    avatarById.set(p.id, p.avatar_url ?? null);
+  });
 
   // Pull recent messages across all conversations and reduce in memory.
   const { data: msgs } = await supabase
@@ -111,6 +116,7 @@ export async function getConversations(): Promise<{
       id: c.id,
       partnerId,
       partnerName: nameById.get(partnerId) ?? "Friend",
+      partnerAvatar: avatarById.get(partnerId) ?? null,
       lastMessage: last?.body ?? null,
       lastKind: last?.kind ?? null,
       lastAt: last?.created_at ?? c.created_at,
@@ -132,7 +138,9 @@ export async function getConversation(coupleId: string): Promise<{
   couple: Couple;
   partnerId: string;
   partnerName: string;
+  partnerAvatar: string | null;
   partnerLastSeen: string | null;
+  disappearSeconds: number;
 } | null> {
   const supabase = await createClient();
   const {
@@ -151,7 +159,7 @@ export async function getConversation(coupleId: string): Promise<{
   const partnerId = couple.user_a === user.id ? couple.user_b : couple.user_a;
   const { data: partner } = await supabase
     .from("profiles")
-    .select("display_name, last_seen")
+    .select("display_name, last_seen, avatar_url")
     .eq("id", partnerId)
     .maybeSingle();
 
@@ -160,6 +168,31 @@ export async function getConversation(coupleId: string): Promise<{
     couple: couple as Couple,
     partnerId,
     partnerName: partner?.display_name || "Friend",
+    partnerAvatar: partner?.avatar_url ?? null,
     partnerLastSeen: partner?.last_seen ?? null,
+    disappearSeconds: (couple as Couple & { disappear_seconds?: number }).disappear_seconds ?? 0,
+  };
+}
+
+// The signed-in user's own profile (for the settings page).
+export async function getMyProfile(): Promise<{
+  userId: string;
+  displayName: string;
+  avatarUrl: string | null;
+} | null> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return null;
+  const { data } = await supabase
+    .from("profiles")
+    .select("display_name, avatar_url")
+    .eq("id", user.id)
+    .maybeSingle();
+  return {
+    userId: user.id,
+    displayName: data?.display_name ?? "You",
+    avatarUrl: data?.avatar_url ?? null,
   };
 }

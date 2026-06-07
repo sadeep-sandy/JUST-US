@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
 import { CallManager, type CallSignal, type CallStatus } from "@/lib/webrtc";
+import { getWallpaperKey, wallpaperBackground } from "@/lib/theme";
 import type { Message, MessageKind, Reaction } from "@/lib/types";
 import ChatHeader from "@/components/ChatHeader";
 import MessageBubble from "@/components/MessageBubble";
@@ -15,7 +16,9 @@ interface Props {
   meId: string;
   partnerId: string;
   partnerName: string;
+  partnerAvatar: string | null;
   partnerLastSeen: string | null;
+  disappearSeconds: number;
   initialMessages: Message[];
 }
 
@@ -24,7 +27,9 @@ export default function ChatRoom({
   meId,
   partnerId,
   partnerName,
+  partnerAvatar,
   partnerLastSeen: initialLastSeen,
+  disappearSeconds: initialDisappear,
   initialMessages,
 }: Props) {
   const supabase = useMemo(() => createClient(), []);
@@ -37,6 +42,8 @@ export default function ChatRoom({
   const [editing, setEditing] = useState<Message | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState("");
+  const [disappearSeconds, setDisappearSeconds] = useState(initialDisappear);
+  const [wallpaper, setWallpaper] = useState("");
 
   // Call state
   const [callStatus, setCallStatus] = useState<CallStatus>("idle");
@@ -196,6 +203,25 @@ export default function ChatRoom({
       });
   }, [online, partnerId, supabase]);
 
+  // ---- Wallpaper (per-device) ----
+  useEffect(() => {
+    setWallpaper(wallpaperBackground(getWallpaperKey()));
+  }, []);
+
+  // ---- Disappearing messages: purge expired on load + periodically ----
+  useEffect(() => {
+    if (disappearSeconds <= 0) return;
+    const purge = () =>
+      supabase.rpc("purge_expired", { p_couple: coupleId }).then(() => {
+        setMessages((prev) =>
+          prev.filter((m) => !m.expires_at || new Date(m.expires_at) > new Date())
+        );
+      });
+    purge();
+    const interval = setInterval(purge, 30000);
+    return () => clearInterval(interval);
+  }, [supabase, coupleId, disappearSeconds]);
+
   // ---- Send a message ----
   const sendMessage = useCallback(
     async (payload: {
@@ -204,6 +230,10 @@ export default function ChatRoom({
       media_path?: string | null;
       reply_to?: string | null;
     }) => {
+      const expires_at =
+        disappearSeconds > 0
+          ? new Date(Date.now() + disappearSeconds * 1000).toISOString()
+          : null;
       const { data } = await supabase
         .from("messages")
         .insert({
@@ -213,13 +243,25 @@ export default function ChatRoom({
           body: payload.body ?? null,
           media_path: payload.media_path ?? null,
           reply_to: payload.reply_to ?? null,
+          expires_at,
         })
         .select()
         .single();
       if (data) upsertMessage(data as Message);
       setReplyingTo(null);
     },
-    [supabase, coupleId, meId, upsertMessage]
+    [supabase, coupleId, meId, upsertMessage, disappearSeconds]
+  );
+
+  const setDisappear = useCallback(
+    async (seconds: number) => {
+      setDisappearSeconds(seconds);
+      await supabase
+        .from("couples")
+        .update({ disappear_seconds: seconds })
+        .eq("id", coupleId);
+    },
+    [supabase, coupleId]
   );
 
   // ---- Reactions / edit / delete ----
@@ -311,22 +353,30 @@ export default function ChatRoom({
   }, [messages]);
 
   const q = query.trim().toLowerCase();
-  const displayMessages = q
-    ? messages.filter(
-        (m) =>
-          m.kind === "text" &&
-          !m.deleted_at &&
-          (m.body ?? "").toLowerCase().includes(q)
-      )
-    : messages;
+  const now = Date.now();
+  const notExpired = (m: Message) =>
+    !m.expires_at || new Date(m.expires_at).getTime() > now;
+  const displayMessages = (
+    q
+      ? messages.filter(
+          (m) =>
+            m.kind === "text" &&
+            !m.deleted_at &&
+            (m.body ?? "").toLowerCase().includes(q)
+        )
+      : messages
+  ).filter(notExpired);
 
   return (
     <div className="mx-auto flex h-dvh w-full max-w-2xl flex-col overflow-hidden bg-white dark:bg-neutral-950">
       <ChatHeader
         partnerName={partnerName}
+        partnerAvatar={partnerAvatar}
         online={online}
         typing={partnerTyping}
         lastSeen={partnerLastSeen}
+        disappearSeconds={disappearSeconds}
+        onSetDisappear={setDisappear}
         onAudioCall={() => startCall(false)}
         onVideoCall={() => startCall(true)}
         onToggleSearch={() => {
@@ -357,7 +407,10 @@ export default function ChatRoom({
         </div>
       )}
 
-      <div className="no-scrollbar min-h-0 flex-1 space-y-1 overflow-y-auto px-4 py-4">
+      <div
+        className="no-scrollbar min-h-0 flex-1 space-y-1 overflow-y-auto px-4 py-4"
+        style={wallpaper ? { background: wallpaper } : undefined}
+      >
         {q && displayMessages.length === 0 && (
           <p className="py-6 text-center text-sm text-neutral-400">
             No messages match “{query}”.
