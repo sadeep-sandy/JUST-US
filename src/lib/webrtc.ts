@@ -25,8 +25,31 @@ export interface CallCallbacks {
 }
 
 function iceServers(): RTCIceServer[] {
+  // STUN handles direct connections; the Metered TURN relays handle calls when
+  // both peers are behind strict NATs / on mobile data (different networks).
   const servers: RTCIceServer[] = [
     { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun.relay.metered.ca:80" },
+    {
+      urls: "turn:global.relay.metered.ca:80",
+      username: "bc9ef72cee7cb027811ed14f",
+      credential: "01nBGeJv/AwzzLxP",
+    },
+    {
+      urls: "turn:global.relay.metered.ca:80?transport=tcp",
+      username: "bc9ef72cee7cb027811ed14f",
+      credential: "01nBGeJv/AwzzLxP",
+    },
+    {
+      urls: "turn:global.relay.metered.ca:443",
+      username: "bc9ef72cee7cb027811ed14f",
+      credential: "01nBGeJv/AwzzLxP",
+    },
+    {
+      urls: "turns:global.relay.metered.ca:443?transport=tcp",
+      username: "bc9ef72cee7cb027811ed14f",
+      credential: "01nBGeJv/AwzzLxP",
+    },
   ];
   const extra = process.env.NEXT_PUBLIC_TURN_SERVERS;
   if (extra) {
@@ -34,7 +57,7 @@ function iceServers(): RTCIceServer[] {
       const parsed = JSON.parse(extra) as RTCIceServer[];
       if (Array.isArray(parsed)) servers.push(...parsed);
     } catch {
-      // Ignore malformed TURN config; fall back to STUN-only.
+      // Ignore malformed TURN config.
     }
   }
   return servers;
