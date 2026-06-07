@@ -27,7 +27,9 @@ export default async function ConversationPage({
     <ChatRoom
       coupleId={convo.couple.id}
       meId={convo.userId}
+      partnerId={convo.partnerId}
       partnerName={convo.partnerName}
+      partnerLastSeen={convo.partnerLastSeen}
       initialMessages={(messages as Message[]) ?? []}
     />
   );

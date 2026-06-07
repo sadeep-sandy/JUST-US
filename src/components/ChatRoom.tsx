@@ -13,14 +13,18 @@ import CallModal from "@/components/CallModal";
 interface Props {
   coupleId: string;
   meId: string;
+  partnerId: string;
   partnerName: string;
+  partnerLastSeen: string | null;
   initialMessages: Message[];
 }
 
 export default function ChatRoom({
   coupleId,
   meId,
+  partnerId,
   partnerName,
+  partnerLastSeen: initialLastSeen,
   initialMessages,
 }: Props) {
   const supabase = useMemo(() => createClient(), []);
@@ -28,8 +32,11 @@ export default function ChatRoom({
   const [reactions, setReactions] = useState<Record<string, Reaction[]>>({});
   const [online, setOnline] = useState(false);
   const [partnerTyping, setPartnerTyping] = useState(false);
+  const [partnerLastSeen, setPartnerLastSeen] = useState<string | null>(initialLastSeen);
   const [replyingTo, setReplyingTo] = useState<Message | null>(null);
   const [editing, setEditing] = useState<Message | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState("");
 
   // Call state
   const [callStatus, setCallStatus] = useState<CallStatus>("idle");
@@ -163,6 +170,32 @@ export default function ChatRoom({
     supabase.rpc("mark_read", { p_couple: coupleId }).then(() => {});
   }, [messages, meId, coupleId, supabase]);
 
+  // ---- Heartbeat: keep my "last seen" fresh while the app is open ----
+  useEffect(() => {
+    const beat = () =>
+      supabase
+        .from("profiles")
+        .update({ last_seen: new Date().toISOString() })
+        .eq("id", meId)
+        .then(() => {});
+    beat();
+    const interval = setInterval(beat, 25000);
+    return () => clearInterval(interval);
+  }, [supabase, meId]);
+
+  // ---- When the partner goes offline, fetch their latest "last seen" ----
+  useEffect(() => {
+    if (online) return;
+    supabase
+      .from("profiles")
+      .select("last_seen")
+      .eq("id", partnerId)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data?.last_seen) setPartnerLastSeen(data.last_seen);
+      });
+  }, [online, partnerId, supabase]);
+
   // ---- Send a message ----
   const sendMessage = useCallback(
     async (payload: {
@@ -277,18 +310,60 @@ export default function ChatRoom({
     return map;
   }, [messages]);
 
+  const q = query.trim().toLowerCase();
+  const displayMessages = q
+    ? messages.filter(
+        (m) =>
+          m.kind === "text" &&
+          !m.deleted_at &&
+          (m.body ?? "").toLowerCase().includes(q)
+      )
+    : messages;
+
   return (
     <div className="mx-auto flex h-dvh w-full max-w-2xl flex-col overflow-hidden bg-white dark:bg-neutral-950">
       <ChatHeader
         partnerName={partnerName}
         online={online}
         typing={partnerTyping}
+        lastSeen={partnerLastSeen}
         onAudioCall={() => startCall(false)}
         onVideoCall={() => startCall(true)}
+        onToggleSearch={() => {
+          setSearchOpen((s) => !s);
+          setQuery("");
+        }}
       />
 
+      {searchOpen && (
+        <div className="flex items-center gap-2 border-b border-neutral-200 px-3 py-2 dark:border-neutral-800">
+          <input
+            autoFocus
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search messages…"
+            className="field"
+          />
+          <button
+            type="button"
+            onClick={() => {
+              setSearchOpen(false);
+              setQuery("");
+            }}
+            className="shrink-0 px-2 text-sm text-neutral-500"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
       <div className="no-scrollbar min-h-0 flex-1 space-y-1 overflow-y-auto px-4 py-4">
-        {messages.length === 0 && (
+        {q && displayMessages.length === 0 && (
+          <p className="py-6 text-center text-sm text-neutral-400">
+            No messages match “{query}”.
+          </p>
+        )}
+        {!q && messages.length === 0 && (
           <div className="flex h-full flex-col items-center justify-center text-center text-neutral-400">
             <div className="mb-3 grid h-20 w-20 place-items-center rounded-full bg-gradient-to-br from-fuchsia-500 to-violet-500 text-3xl text-white">
               {partnerName.charAt(0).toUpperCase()}
@@ -297,7 +372,7 @@ export default function ChatRoom({
             <p className="mt-1 text-sm">This is the beginning of your private chat 💜</p>
           </div>
         )}
-        {messages.map((m) => (
+        {displayMessages.map((m) => (
           <MessageBubble
             key={m.id}
             message={m}

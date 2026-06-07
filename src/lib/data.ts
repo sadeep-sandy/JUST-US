@@ -126,11 +126,13 @@ export async function getConversations(): Promise<{
   return { userId: user.id, conversations };
 }
 
-// Resolves a single conversation the user belongs to, with the partner name.
+// Resolves a single conversation the user belongs to, with the partner info.
 export async function getConversation(coupleId: string): Promise<{
   userId: string;
   couple: Couple;
+  partnerId: string;
   partnerName: string;
+  partnerLastSeen: string | null;
 } | null> {
   const supabase = await createClient();
   const {
@@ -149,13 +151,15 @@ export async function getConversation(coupleId: string): Promise<{
   const partnerId = couple.user_a === user.id ? couple.user_b : couple.user_a;
   const { data: partner } = await supabase
     .from("profiles")
-    .select("display_name")
+    .select("display_name, last_seen")
     .eq("id", partnerId)
     .maybeSingle();
 
   return {
     userId: user.id,
     couple: couple as Couple,
+    partnerId,
     partnerName: partner?.display_name || "Friend",
+    partnerLastSeen: partner?.last_seen ?? null,
   };
 }

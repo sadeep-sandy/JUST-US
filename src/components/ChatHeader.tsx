@@ -1,24 +1,58 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 
 interface Props {
   partnerName: string;
   online: boolean;
   typing: boolean;
+  lastSeen: string | null;
   onAudioCall: () => void;
   onVideoCall: () => void;
+  onToggleSearch: () => void;
+}
+
+function lastSeenLabel(iso: string): string {
+  const then = new Date(iso).getTime();
+  const diff = Date.now() - then;
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "last seen just now";
+  if (mins < 60) return `last seen ${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `last seen ${hrs}h ago`;
+  const days = Math.floor(hrs / 24);
+  if (days === 1) return "last seen yesterday";
+  if (days < 7) return `last seen ${days}d ago`;
+  return "last seen " + new Date(iso).toLocaleDateString();
 }
 
 export default function ChatHeader({
   partnerName,
   online,
   typing,
+  lastSeen,
   onAudioCall,
   onVideoCall,
+  onToggleSearch,
 }: Props) {
   const initial = partnerName.charAt(0).toUpperCase();
-  const status = typing ? "typing…" : online ? "Active now" : "Offline";
+
+  // Render the dynamic status only after mount to avoid hydration mismatches
+  // (relative times differ between server and client).
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
+  let status = " ";
+  if (mounted) {
+    status = typing
+      ? "typing…"
+      : online
+        ? "Active now"
+        : lastSeen
+          ? lastSeenLabel(lastSeen)
+          : "Offline";
+  }
 
   return (
     <header className="flex items-center gap-2 border-b border-neutral-200 bg-white px-2 py-2.5 dark:border-neutral-800 dark:bg-neutral-950">
@@ -31,6 +65,7 @@ export default function ChatHeader({
           <polyline points="15 18 9 12 15 6" />
         </svg>
       </Link>
+
       <div className="relative">
         <div className="grid h-10 w-10 place-items-center rounded-full bg-gradient-to-br from-fuchsia-500 to-violet-500 font-semibold text-white">
           {initial}
@@ -45,17 +80,20 @@ export default function ChatHeader({
           {partnerName}
         </p>
         <p
-          className={`text-xs ${
-            typing
-              ? "text-violet-500"
-              : online
-                ? "text-emerald-500"
-                : "text-neutral-400"
+          className={`truncate text-xs ${
+            typing ? "text-violet-500" : online ? "text-emerald-500" : "text-neutral-400"
           }`}
         >
           {status}
         </p>
       </div>
+
+      <IconButton label="Search" onClick={onToggleSearch}>
+        <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <circle cx="11" cy="11" r="7" />
+          <line x1="21" y1="21" x2="16.65" y2="16.65" />
+        </svg>
+      </IconButton>
 
       <IconButton label="Voice call" onClick={onAudioCall}>
         <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -87,7 +125,7 @@ function IconButton({
       type="button"
       onClick={onClick}
       aria-label={label}
-      className="grid h-10 w-10 place-items-center rounded-full text-neutral-700 transition hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800"
+      className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-neutral-700 transition hover:bg-neutral-100 dark:text-neutral-200 dark:hover:bg-neutral-800"
     >
       {children}
     </button>

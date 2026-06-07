@@ -49,7 +49,13 @@ export default function ConversationList({
   const router = useRouter();
   const supabase = useMemo(() => createClient(), []);
   const [mounted, setMounted] = useState(false);
+  const [query, setQuery] = useState("");
   useEffect(() => setMounted(true), []);
+
+  const q = query.trim().toLowerCase();
+  const visible = q
+    ? conversations.filter((c) => c.partnerName.toLowerCase().includes(q))
+    : conversations;
 
   // Keep the inbox live, but coalesce bursts of events into one refresh so
   // it never thrashes (e.g. when many read-receipts update at once).
@@ -112,6 +118,17 @@ export default function ConversationList({
         </div>
       </header>
 
+      {conversations.length > 0 && (
+        <div className="px-3 py-2">
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search chats…"
+            className="field"
+          />
+        </div>
+      )}
+
       {conversations.length === 0 ? (
         <div className="flex flex-1 flex-col items-center justify-center px-8 text-center text-neutral-400">
           <div className="mb-4 grid h-20 w-20 place-items-center rounded-full bg-gradient-to-br from-fuchsia-500 to-violet-500 text-3xl text-white">
@@ -132,7 +149,12 @@ export default function ConversationList({
         </div>
       ) : (
         <ul className="flex-1 overflow-y-auto">
-          {conversations.map((c) => (
+          {visible.length === 0 && (
+            <li className="py-6 text-center text-sm text-neutral-400">
+              No chats match “{query}”.
+            </li>
+          )}
+          {visible.map((c) => (
             <li key={c.id}>
               <Link
                 href={`/chat/${c.id}`}
