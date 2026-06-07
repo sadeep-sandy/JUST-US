@@ -3,13 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
-import { CallManager, type CallSignal, type CallStatus } from "@/lib/webrtc";
 import { getWallpaperKey, wallpaperBackground } from "@/lib/theme";
+import { useCall } from "@/components/CallProvider";
 import type { Message, MessageKind, Reaction } from "@/lib/types";
 import ChatHeader from "@/components/ChatHeader";
 import MessageBubble from "@/components/MessageBubble";
 import Composer from "@/components/Composer";
-import CallModal from "@/components/CallModal";
 
 interface Props {
   coupleId: string;
@@ -45,21 +44,12 @@ export default function ChatRoom({
   const [disappearSeconds, setDisappearSeconds] = useState(initialDisappear);
   const [wallpaper, setWallpaper] = useState("");
 
-  // Call state
-  const [callStatus, setCallStatus] = useState<CallStatus>("idle");
-  const [callVideo, setCallVideo] = useState(false);
-  const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const { startCall } = useCall();
 
   const roomChannelRef = useRef<RealtimeChannel | null>(null);
-  const callRef = useRef<CallManager | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const typingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messageIdsRef = useRef<string[]>([]);
-
-  const isCallerRef = useRef(false);
-  const connectedAtRef = useRef<number | null>(null);
-  const loggedRef = useRef(false);
 
   const upsertMessage = useCallback((m: Message) => {
     setMessages((prev) => {
@@ -120,18 +110,8 @@ export default function ChatRoom({
     };
   }, [supabase, coupleId, upsertMessage, loadReactions]);
 
-  // ---- Presence / typing / call signaling on one room channel ----
+  // ---- Presence / typing on one room channel (calls are handled globally) ----
   useEffect(() => {
-    const manager = new CallManager({
-      send: (signal: CallSignal) =>
-        roomChannelRef.current?.send({ type: "broadcast", event: "signal", payload: signal }),
-      onStatus: setCallStatus,
-      onLocalStream: setLocalStream,
-      onRemoteStream: setRemoteStream,
-      onVideoChange: setCallVideo,
-    });
-    callRef.current = manager;
-
     const channel = supabase.channel(`room:${coupleId}`, {
       config: { presence: { key: meId } },
     });
@@ -146,9 +126,6 @@ export default function ChatRoom({
         if (payload?.from === meId) return;
         setPartnerTyping(Boolean(payload?.typing));
       })
-      .on("broadcast", { event: "signal" }, ({ payload }) => {
-        manager.handleSignal(payload as CallSignal);
-      })
       .subscribe(async (status) => {
         if (status === "SUBSCRIBED") {
           await channel.track({ online_at: new Date().toISOString() });
@@ -158,7 +135,6 @@ export default function ChatRoom({
     roomChannelRef.current = channel;
 
     return () => {
-      manager.hangup();
       supabase.removeChannel(channel);
       roomChannelRef.current = null;
     };
@@ -313,39 +289,6 @@ export default function ChatRoom({
     }, 1500);
   }, [meId]);
 
-  const startCall = (video: boolean) => {
-    isCallerRef.current = true;
-    connectedAtRef.current = null;
-    loggedRef.current = false;
-    callRef.current?.start(video);
-  };
-  const acceptCall = () => {
-    isCallerRef.current = false;
-    callRef.current?.accept();
-  };
-  const hangup = () => callRef.current?.hangup();
-  const toggleMute = () => callRef.current?.toggleMute() ?? false;
-  const toggleCamera = () => callRef.current?.toggleCamera() ?? false;
-
-  useEffect(() => {
-    if (callStatus === "connected" && connectedAtRef.current === null) {
-      connectedAtRef.current = Date.now();
-    }
-    if (callStatus === "ended" && isCallerRef.current && !loggedRef.current) {
-      loggedRef.current = true;
-      const start = connectedAtRef.current;
-      const seconds = start ? Math.round((Date.now() - start) / 1000) : 0;
-      const outcome = start ? "ended" : "missed";
-      const body = `${callVideo ? "video" : "voice"}|${outcome}|${seconds}`;
-      sendMessage({ kind: "call", body });
-      connectedAtRef.current = null;
-      isCallerRef.current = false;
-    }
-  }, [callStatus, callVideo, sendMessage]);
-
-  const inCall =
-    callStatus === "calling" || callStatus === "incoming" || callStatus === "connected";
-
   const messageById = useMemo(() => {
     const map = new Map<string, Message>();
     messages.forEach((m) => map.set(m.id, m));
@@ -378,8 +321,8 @@ export default function ChatRoom({
         lastSeen={partnerLastSeen}
         disappearSeconds={disappearSeconds}
         onSetDisappear={setDisappear}
-        onAudioCall={() => startCall(false)}
-        onVideoCall={() => startCall(true)}
+        onAudioCall={() => startCall(coupleId, partnerName, false)}
+        onVideoCall={() => startCall(coupleId, partnerName, true)}
         onToggleSearch={() => {
           setSearchOpen((s) => !s);
           setQuery("");
@@ -460,20 +403,6 @@ export default function ChatRoom({
         onCancelEdit={() => setEditing(null)}
         onSubmitEdit={submitEdit}
       />
-
-      {inCall && (
-        <CallModal
-          status={callStatus}
-          video={callVideo}
-          partnerName={partnerName}
-          localStream={localStream}
-          remoteStream={remoteStream}
-          onAccept={acceptCall}
-          onHangup={hangup}
-          onToggleMute={toggleMute}
-          onToggleCamera={toggleCamera}
-        />
-      )}
     </div>
     </div>
   );

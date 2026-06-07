@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Geist } from "next/font/google";
 import "./globals.css";
+import CallProvider from "@/components/CallProvider";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -34,7 +35,7 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${geistSans.variable} h-full antialiased`}>
       <body className="min-h-dvh flex flex-col bg-neutral-50 dark:bg-neutral-950">
-        {children}
+        <CallProvider>{children}</CallProvider>
       </body>
     </html>
   );
