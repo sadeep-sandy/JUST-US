@@ -28,6 +28,7 @@ export default function CallModal({
 }: Props) {
   const localRef = useRef<HTMLVideoElement | null>(null);
   const remoteRef = useRef<HTMLVideoElement | null>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const [muted, setMuted] = useState(false);
   const [camOff, setCamOff] = useState(false);
 
@@ -38,6 +39,13 @@ export default function CallModal({
   useEffect(() => {
     if (remoteRef.current && remoteStream)
       remoteRef.current.srcObject = remoteStream;
+  }, [remoteStream, video]);
+
+  // Always play the partner's audio through a dedicated <audio> element, so
+  // sound works on voice-only calls (which show an avatar, not a video).
+  useEffect(() => {
+    if (remoteAudioRef.current && remoteStream)
+      remoteAudioRef.current.srcObject = remoteStream;
   }, [remoteStream]);
 
   const label =
@@ -55,11 +63,15 @@ export default function CallModal({
     <div className="fixed inset-0 z-50 flex flex-col items-center justify-between bg-neutral-950 p-6 text-white">
       {/* Remote view */}
       <div className="relative flex w-full flex-1 items-center justify-center">
+        {/* Partner audio — always present so voice calls have sound. */}
+        <audio ref={remoteAudioRef} autoPlay playsInline className="hidden" />
+
         {video && remoteStream ? (
           <video
             ref={remoteRef}
             autoPlay
             playsInline
+            muted
             className="h-full w-full rounded-2xl bg-black object-contain"
           />
         ) : (
