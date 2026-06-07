@@ -51,22 +51,33 @@ export default function ConversationList({
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
-  // Keep the inbox live: refresh when a message or a new conversation arrives.
+  // Keep the inbox live, but coalesce bursts of events into one refresh so
+  // it never thrashes (e.g. when many read-receipts update at once).
   useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const refreshSoon = () => {
+      if (timer) return;
+      timer = setTimeout(() => {
+        timer = null;
+        router.refresh();
+      }, 600);
+    };
+
     const channel = supabase
       .channel("inbox")
       .on(
         "postgres_changes",
-        { event: "*", schema: "public", table: "messages" },
-        () => router.refresh()
+        { event: "INSERT", schema: "public", table: "messages" },
+        refreshSoon
       )
       .on(
         "postgres_changes",
         { event: "INSERT", schema: "public", table: "couples" },
-        () => router.refresh()
+        refreshSoon
       )
       .subscribe();
     return () => {
+      if (timer) clearTimeout(timer);
       supabase.removeChannel(channel);
     };
   }, [supabase, router]);
