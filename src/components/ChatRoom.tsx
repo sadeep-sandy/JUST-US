@@ -325,7 +325,7 @@ export default function ChatRoom({
         onSetDisappear={setDisappear}
         onAudioCall={() => startCall(coupleId, partnerName, false)}
         onVideoCall={() => startCall(coupleId, partnerName, true)}
-        onPlayGame={game.invite}
+        onPlayGame={game.open}
         onToggleSearch={() => {
           setSearchOpen((s) => !s);
           setQuery("");
