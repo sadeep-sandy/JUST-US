@@ -14,6 +14,7 @@ interface Props {
   onAudioCall: () => void;
   onVideoCall: () => void;
   onToggleSearch: () => void;
+  onPlayGame: () => void;
 }
 
 const DISAPPEAR_OPTIONS = [
@@ -47,6 +48,7 @@ export default function ChatHeader({
   onAudioCall,
   onVideoCall,
   onToggleSearch,
+  onPlayGame,
 }: Props) {
   const initial = partnerName.charAt(0).toUpperCase();
   const [mounted, setMounted] = useState(false);
@@ -108,6 +110,16 @@ export default function ChatHeader({
         <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="11" cy="11" r="7" />
           <line x1="21" y1="21" x2="16.65" y2="16.65" />
+        </svg>
+      </IconButton>
+
+      <IconButton label="Play a game" onClick={onPlayGame}>
+        <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="6" y1="11" x2="10" y2="11" />
+          <line x1="8" y1="9" x2="8" y2="13" />
+          <line x1="15" y1="12" x2="15.01" y2="12" />
+          <line x1="18" y1="10" x2="18.01" y2="10" />
+          <rect x="2" y="6" width="20" height="12" rx="4" />
         </svg>
       </IconButton>
 

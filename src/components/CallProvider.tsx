@@ -160,6 +160,87 @@ export default function CallProvider({
     }
   }, [status, video, supabase, userId]);
 
+  const inCall =
+    status === "calling" || status === "incoming" || status === "connected";
+
+  // Keep audio alive when the screen turns off or the app is backgrounded.
+  // Two mobile-browser hazards during a call:
+  //   1. The screen auto-blacks-out after inactivity (no touches during a call),
+  //      and once backgrounded the tab is frozen → WebRTC audio stops.
+  //   2. A manual lock/background freezes the tab unless an active Media Session
+  //      tells the OS that audio is genuinely playing.
+  // A Screen Wake Lock fixes (1); a "playing" Media Session fixes (2).
+  useEffect(() => {
+    if (!inCall) return;
+
+    type WakeLockSentinel = { release: () => Promise<void>; released: boolean };
+    type WakeLockNav = Navigator & {
+      wakeLock?: { request: (type: "screen") => Promise<WakeLockSentinel> };
+    };
+
+    let sentinel: WakeLockSentinel | null = null;
+    let cancelled = false;
+
+    const acquire = async () => {
+      const wl = (navigator as WakeLockNav).wakeLock;
+      if (!wl) return;
+      try {
+        const s = await wl.request("screen");
+        if (cancelled) {
+          s.release().catch(() => {});
+          return;
+        }
+        sentinel = s;
+      } catch {
+        // Wake Lock unsupported or denied (e.g. not visible) — ignore.
+      }
+    };
+
+    // The OS auto-releases the wake lock when the page is hidden; re-acquire it
+    // (and nudge audio playback) as soon as the user returns to the call.
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") acquire();
+    };
+
+    acquire();
+    document.addEventListener("visibilitychange", onVisibility);
+
+    // Declare an active media session so the browser keeps audio running in the
+    // background and the lock screen shows the call as ongoing audio.
+    const ms = navigator.mediaSession;
+    if (ms) {
+      try {
+        ms.metadata = new MediaMetadata({
+          title: `${peerName}`,
+          artist: video ? "Video call" : "Voice call",
+        });
+        ms.playbackState = "playing";
+        // No-op handlers so the OS doesn't pause/stop our stream.
+        ms.setActionHandler("pause", () => {});
+        ms.setActionHandler("play", () => {});
+      } catch {
+        // MediaSession partially unsupported — ignore.
+      }
+    }
+
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisibility);
+      sentinel?.release().catch(() => {});
+      sentinel = null;
+      if (ms) {
+        ms.playbackState = "none";
+        try {
+          ms.metadata = null;
+          ms.setActionHandler("pause", null);
+          ms.setActionHandler("play", null);
+        } catch {
+          // ignore
+        }
+      }
+    };
+  }, [inCall, peerName, video]);
+
   const startCall = useCallback(
     (coupleId: string, partnerName: string, v: boolean) => {
       activeCoupleRef.current = coupleId;
@@ -171,9 +252,6 @@ export default function CallProvider({
     },
     []
   );
-
-  const inCall =
-    status === "calling" || status === "incoming" || status === "connected";
 
   return (
     <CallContext.Provider value={{ startCall }}>

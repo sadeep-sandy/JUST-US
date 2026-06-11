@@ -33,6 +33,10 @@ export default function CallModal({
   const [camOff, setCamOff] = useState(false);
   // Voice calls default to speaker (web default); video calls default to speaker too.
   const [speaker, setSpeaker] = useState(true);
+  // Guard against an accidental tap right after the call connects: the controls
+  // layout shifts (Answer's slot becomes End call), so for a brief moment we
+  // ignore taps on "End call" to avoid hanging up the call by mistake.
+  const [hangupArmed, setHangupArmed] = useState(true);
 
   // Best-effort output routing: tries to switch the remote audio between the
   // loudspeaker and the earpiece. Works where the browser exposes outputs.
@@ -75,6 +79,32 @@ export default function CallModal({
       remoteAudioRef.current.srcObject = remoteStream;
   }, [remoteStream]);
 
+  // Some mobile browsers pause the audio element when the screen locks or the
+  // app is backgrounded. Re-issue play() whenever we come back to the front so
+  // the partner's voice resumes immediately.
+  useEffect(() => {
+    const resume = () => {
+      const el = remoteAudioRef.current;
+      if (el && document.visibilityState === "visible") {
+        el.play().catch(() => {});
+      }
+    };
+    document.addEventListener("visibilitychange", resume);
+    return () => document.removeEventListener("visibilitychange", resume);
+  }, []);
+
+  // When the call connects, briefly disarm the End-call button so a stray
+  // second tap (left over from tapping Answer) can't immediately hang up.
+  useEffect(() => {
+    if (status !== "connected") {
+      setHangupArmed(true);
+      return;
+    }
+    setHangupArmed(false);
+    const t = setTimeout(() => setHangupArmed(true), 800);
+    return () => clearTimeout(t);
+  }, [status]);
+
   const label =
     status === "calling"
       ? "Calling…"
@@ -85,6 +115,11 @@ export default function CallModal({
           : "";
 
   const initial = partnerName.charAt(0).toUpperCase();
+
+  // Shared touch behaviour: instant press feedback (scale), no 300ms tap delay,
+  // no grey tap-highlight box, and not text-selectable.
+  const tap =
+    "transition active:scale-90 touch-manipulation select-none [-webkit-tap-highlight-color:transparent]";
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col items-center justify-between bg-neutral-950 p-6 text-white">
@@ -125,65 +160,70 @@ export default function CallModal({
       <p className="py-3 text-rose-200">{label}</p>
 
       {/* Controls */}
-      <div className="flex items-center gap-5 pb-2">
-        {status === "incoming" ? (
-          <>
+      {status === "incoming" ? (
+        <div className="flex items-end justify-center gap-16 pb-4">
+          <div className="flex flex-col items-center gap-2">
             <button
               onClick={onHangup}
-              className="grid h-16 w-16 place-items-center rounded-full bg-red-600 text-white shadow-lg transition hover:bg-red-700"
+              className={`grid h-16 w-16 place-items-center rounded-full bg-red-600 text-white shadow-lg active:bg-red-700 ${tap}`}
               aria-label="Decline"
             >
               <PhoneIcon down />
             </button>
+            <span className="text-xs text-white/70">Decline</span>
+          </div>
+          <div className="flex flex-col items-center gap-2">
             <button
               onClick={onAccept}
-              className="grid h-16 w-16 place-items-center rounded-full bg-emerald-500 text-white shadow-lg transition hover:bg-emerald-600"
-              aria-label="Accept"
+              className={`grid h-16 w-16 place-items-center rounded-full bg-emerald-500 text-white shadow-lg active:bg-emerald-600 ${tap}`}
+              aria-label="Answer"
             >
               <PhoneIcon />
             </button>
-          </>
-        ) : (
-          <>
+            <span className="text-xs text-white/70">Answer</span>
+          </div>
+        </div>
+      ) : (
+        <div className="flex items-center gap-5 pb-2">
+          <button
+            onClick={() => setMuted(onToggleMute())}
+            className={`grid h-14 w-14 place-items-center rounded-full ${tap} ${
+              muted ? "bg-white text-neutral-900" : "bg-white/15 text-white active:bg-white/30"
+            }`}
+            aria-label="Mute"
+          >
+            <MicIcon off={muted} />
+          </button>
+          <button
+            onClick={() => applySpeaker(!speaker)}
+            className={`grid h-14 w-14 place-items-center rounded-full ${tap} ${
+              speaker ? "bg-white text-neutral-900" : "bg-white/15 text-white active:bg-white/30"
+            }`}
+            aria-label={speaker ? "Speaker on" : "Speaker off"}
+          >
+            <SpeakerIcon off={!speaker} />
+          </button>
+          {video && (
             <button
-              onClick={() => setMuted(onToggleMute())}
-              className={`grid h-14 w-14 place-items-center rounded-full transition ${
-                muted ? "bg-white text-neutral-900" : "bg-white/15 text-white hover:bg-white/25"
+              onClick={() => setCamOff(onToggleCamera())}
+              className={`grid h-14 w-14 place-items-center rounded-full ${tap} ${
+                camOff ? "bg-white text-neutral-900" : "bg-white/15 text-white active:bg-white/30"
               }`}
-              aria-label="Mute"
+              aria-label="Toggle camera"
             >
-              <MicIcon off={muted} />
+              <CameraIcon off={camOff} />
             </button>
-            <button
-              onClick={() => applySpeaker(!speaker)}
-              className={`grid h-14 w-14 place-items-center rounded-full transition ${
-                speaker ? "bg-white text-neutral-900" : "bg-white/15 text-white hover:bg-white/25"
-              }`}
-              aria-label={speaker ? "Speaker on" : "Speaker off"}
-            >
-              <SpeakerIcon off={!speaker} />
-            </button>
-            {video && (
-              <button
-                onClick={() => setCamOff(onToggleCamera())}
-                className={`grid h-14 w-14 place-items-center rounded-full transition ${
-                  camOff ? "bg-white text-neutral-900" : "bg-white/15 text-white hover:bg-white/25"
-                }`}
-                aria-label="Toggle camera"
-              >
-                <CameraIcon off={camOff} />
-              </button>
-            )}
-            <button
-              onClick={onHangup}
-              className="grid h-16 w-16 place-items-center rounded-full bg-red-600 text-white shadow-lg transition hover:bg-red-700"
-              aria-label="End call"
-            >
-              <PhoneIcon down />
-            </button>
-          </>
-        )}
-      </div>
+          )}
+          <button
+            onClick={() => hangupArmed && onHangup()}
+            disabled={!hangupArmed}
+            className={`grid h-16 w-16 place-items-center rounded-full bg-red-600 text-white shadow-lg active:bg-red-700 disabled:opacity-50 ${tap}`}
+            aria-label="End call"
+          >
+            <PhoneIcon down />
+          </button>
+        </div>
+      )}
     </div>
   );
 }
