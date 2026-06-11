@@ -25,6 +25,9 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
+  // Resize the layout when the on-screen keyboard opens, so the chat composer
+  // stays visible above it instead of being covered (no layout jump).
+  interactiveWidget: "resizes-content",
 };
 
 export default function RootLayout({

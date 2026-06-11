@@ -49,9 +49,19 @@ export default function ChatRoom({
   const game = useCoupleGame(coupleId, meId);
 
   const roomChannelRef = useRef<RealtimeChannel | null>(null);
-  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const nearBottomRef = useRef(true);
+  const firstScrollRef = useRef(true);
   const typingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const messageIdsRef = useRef<string[]>([]);
+
+  // Height/offset of the visible area. On mobile the on-screen keyboard shrinks
+  // the visual viewport; tracking it keeps the composer above the keyboard and
+  // stops the layout from jumping. Falls back to the dynamic viewport unit.
+  const [viewport, setViewport] = useState<{ height: string; top: number }>({
+    height: "100dvh",
+    top: 0,
+  });
 
   const upsertMessage = useCallback((m: Message) => {
     setMessages((prev) => {
@@ -142,10 +152,49 @@ export default function ChatRoom({
     };
   }, [supabase, coupleId, meId]);
 
-  // ---- Auto-scroll to newest ----
+  // ---- Auto-scroll to newest (scrolls the list itself, never the page) ----
+  // Only follows new messages when you're already near the bottom, so reading
+  // older messages isn't interrupted. Instant on first paint, smooth after.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    const el = scrollRef.current;
+    if (!el) return;
+    if (firstScrollRef.current) {
+      el.scrollTop = el.scrollHeight;
+      firstScrollRef.current = false;
+      return;
+    }
+    if (nearBottomRef.current) {
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    }
   }, [messages, partnerTyping]);
+
+  // ---- Track whether the user is near the bottom of the thread ----
+  const onScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    nearBottomRef.current = distance < 120;
+  }, []);
+
+  // ---- Follow the visual viewport (keyboard open/close) ----
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const update = () => {
+      setViewport({ height: `${vv.height}px`, top: vv.offsetTop });
+      // Keep the latest message in view as the keyboard animates in.
+      if (nearBottomRef.current && scrollRef.current) {
+        scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      }
+    };
+    update();
+    vv.addEventListener("resize", update);
+    vv.addEventListener("scroll", update);
+    return () => {
+      vv.removeEventListener("resize", update);
+      vv.removeEventListener("scroll", update);
+    };
+  }, []);
 
   // ---- Read receipts (via RPC, so only read_at is touched) ----
   useEffect(() => {
@@ -313,7 +362,13 @@ export default function ChatRoom({
   ).filter(notExpired);
 
   return (
-    <div className="fixed inset-0 z-0 flex justify-center bg-white dark:bg-neutral-950">
+    <div
+      className="fixed inset-x-0 top-0 z-0 flex justify-center bg-white dark:bg-neutral-950"
+      style={{
+        height: viewport.height,
+        transform: viewport.top ? `translateY(${viewport.top}px)` : undefined,
+      }}
+    >
     <div className="flex h-full w-full max-w-2xl flex-col overflow-hidden bg-white dark:bg-neutral-950">
       <ChatHeader
         partnerName={partnerName}
@@ -325,7 +380,7 @@ export default function ChatRoom({
         onSetDisappear={setDisappear}
         onAudioCall={() => startCall(coupleId, partnerName, false)}
         onVideoCall={() => startCall(coupleId, partnerName, true)}
-        onPlayGame={game.invite}
+        onPlayGame={game.open}
         onToggleSearch={() => {
           setSearchOpen((s) => !s);
           setQuery("");
@@ -355,6 +410,8 @@ export default function ChatRoom({
       )}
 
       <div
+        ref={scrollRef}
+        onScroll={onScroll}
         className="no-scrollbar min-h-0 flex-1 space-y-1 overflow-y-auto px-4 py-4"
         style={wallpaper ? { background: wallpaper } : undefined}
       >
@@ -391,7 +448,6 @@ export default function ChatRoom({
             <Dot /> <Dot delay="150ms" /> <Dot delay="300ms" />
           </div>
         )}
-        <div ref={bottomRef} />
       </div>
 
       <Composer

@@ -64,6 +64,29 @@ body {
   }
 }
 
+/* Snappier touch everywhere: remove the 300ms tap delay and the grey
+   tap-highlight box that make taps feel laggy/unregistered on mobile. */
+button,
+a,
+[role="button"],
+input,
+textarea,
+select {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+/* On touch devices (no hover), give every button instant press feedback so
+   you can always tell a tap registered. Desktop hover styles are untouched. */
+@media (hover: none) {
+  button:active,
+  a:active,
+  [role="button"]:active {
+    opacity: 0.55;
+    transition: opacity 0.03s ease;
+  }
+}
+
 /* Hide scrollbars in the chat thread but keep scrolling. */
 .no-scrollbar::-webkit-scrollbar {
   display: none;
