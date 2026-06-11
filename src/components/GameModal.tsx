@@ -13,10 +13,11 @@ import { createClient } from "@/lib/supabase/client";
 // move handlers, and a <Board> renderer. Everything else is shared.
 // ---------------------------------------------------------------------------
 
-export type GameId = "ttt" | "rps";
+export type GameId = "ttt" | "rps" | "c4";
 
 export const GAMES: { id: GameId; name: string; emoji: string; blurb: string }[] = [
   { id: "ttt", name: "Tic-Tac-Toe", emoji: "⭕", blurb: "Classic 3-in-a-row" },
+  { id: "c4", name: "Connect Four", emoji: "🔴", blurb: "Drop 4 in a row" },
   { id: "rps", name: "Rock Paper Scissors", emoji: "✊", blurb: "Quick best-of throws" },
 ];
 
@@ -24,6 +25,10 @@ type Phase = "idle" | "picking" | "inviting" | "invited" | "playing";
 type Mark = "X" | "O";
 type Cell = Mark | null;
 type Throw = "rock" | "paper" | "scissors";
+type Disc = "R" | "Y"; // Connect Four: Red (host, first) vs Yellow (guest)
+
+const C4_COLS = 7;
+const C4_ROWS = 6;
 
 const LINES = [
   [0, 1, 2], [3, 4, 5], [6, 7, 8],
@@ -44,6 +49,24 @@ function rpsOutcome(mine: Throw, theirs: Throw): "win" | "lose" | "draw" {
   return BEATS[mine] === theirs ? "win" : "lose";
 }
 
+// Connect Four win check: scan every cell for 4 in a row in any direction.
+function c4Winner(b: (Disc | null)[]): Disc | "draw" | null {
+  const at = (r: number, c: number) =>
+    r >= 0 && r < C4_ROWS && c >= 0 && c < C4_COLS ? b[r * C4_COLS + c] : null;
+  for (let r = 0; r < C4_ROWS; r++) {
+    for (let c = 0; c < C4_COLS; c++) {
+      const v = at(r, c);
+      if (!v) continue;
+      for (const [dr, dc] of [[0, 1], [1, 0], [1, 1], [1, -1]]) {
+        let k = 1;
+        while (k < 4 && at(r + dr * k, c + dc * k) === v) k++;
+        if (k === 4) return v;
+      }
+    }
+  }
+  return b.every(Boolean) ? "draw" : null;
+}
+
 interface GState {
   phase: Phase;
   game: GameId | null;
@@ -58,6 +81,11 @@ interface GState {
   myScore: number;
   theirScore: number;
   scored: boolean;
+  // connect four
+  c4board: (Disc | null)[];
+  c4Disc: Disc | null;
+  c4Turn: Disc;
+  c4Result: Disc | "draw" | null;
   // shared
   declined: boolean;
 }
@@ -74,15 +102,27 @@ const FRESH = (): GState => ({
   myScore: 0,
   theirScore: 0,
   scored: false,
+  c4board: Array(C4_COLS * C4_ROWS).fill(null),
+  c4Disc: null,
+  c4Turn: "R",
+  c4Result: null,
   declined: false,
 });
 
-// Builds a fresh per-game state for a given phase. `role` decides the X/O
-// assignment in Tic-Tac-Toe (host = X and moves first).
+// Builds a fresh per-game state for a given phase. `role` decides who plays
+// first: Tic-Tac-Toe host = X, Connect Four host = R (Red).
 function makeState(phase: Phase, game: GameId, role: "host" | "guest"): GState {
   const base = { ...FRESH(), phase, game };
   if (game === "ttt") return { ...base, myMark: role === "host" ? "X" : "O", turn: "X" };
+  if (game === "c4") return { ...base, c4Disc: role === "host" ? "R" : "Y", c4Turn: "R" };
   return base;
+}
+
+// Derives host/guest from the player's assigned colour/mark, so a rematch keeps
+// the same sides.
+function roleOf(p: GState): "host" | "guest" {
+  if (p.game === "c4") return p.c4Disc === "R" ? "host" : "guest";
+  return p.myMark === "X" ? "host" : "guest";
 }
 
 function applyTttMove(prev: GState, index: number, mark: Mark): GState {
@@ -90,6 +130,25 @@ function applyTttMove(prev: GState, index: number, mark: Mark): GState {
   const board = prev.board.slice();
   board[index] = mark;
   return { ...prev, board, tttResult: tttWinner(board), turn: mark === "X" ? "O" : "X" };
+}
+
+// Drops a disc into a column: it lands on the lowest empty row.
+function applyC4Drop(prev: GState, col: number, disc: Disc): GState {
+  if (prev.c4Result) return prev;
+  const board = prev.c4board.slice();
+  for (let r = C4_ROWS - 1; r >= 0; r--) {
+    const i = r * C4_COLS + col;
+    if (!board[i]) {
+      board[i] = disc;
+      return {
+        ...prev,
+        c4board: board,
+        c4Result: c4Winner(board),
+        c4Turn: disc === "R" ? "Y" : "R",
+      };
+    }
+  }
+  return prev; // column full
 }
 
 // Scores a Rock-Paper-Scissors round once both throws are in (guarded so it
@@ -118,6 +177,10 @@ export interface CoupleGame {
   theirThrow: Throw | null;
   myScore: number;
   theirScore: number;
+  c4board: (Disc | null)[];
+  c4Disc: Disc | null;
+  c4Turn: Disc;
+  c4Result: Disc | "draw" | null;
   declined: boolean;
   open: () => void;
   choose: (game: GameId) => void;
@@ -126,6 +189,7 @@ export interface CoupleGame {
   decline: () => void;
   play: (index: number) => void;
   throwRps: (choice: Throw) => void;
+  dropC4: (col: number) => void;
   nextRound: () => void;
   rematch: () => void;
   close: () => void;
@@ -182,6 +246,12 @@ export function useCoupleGame(coupleId: string, meId: string): CoupleGame {
         if (t !== "rock" && t !== "paper" && t !== "scissors") return;
         setState((p) => (p.game === "rps" ? settleRps({ ...p, theirThrow: t }) : p));
       })
+      .on("broadcast", { event: "c4_move" }, ({ payload }) => {
+        const col = payload?.col as number;
+        const disc = payload?.disc as Disc;
+        if (typeof col !== "number" || (disc !== "R" && disc !== "Y")) return;
+        setState((p) => (p.phase === "playing" && p.game === "c4" ? applyC4Drop(p, col, disc) : p));
+      })
       .on("broadcast", { event: "rps_next" }, () => {
         setState((p) =>
           p.game === "rps"
@@ -191,8 +261,8 @@ export function useCoupleGame(coupleId: string, meId: string): CoupleGame {
       })
       .on("broadcast", { event: "rematch" }, () => {
         setState((p) =>
-          p.game === "ttt" && p.myMark
-            ? makeState("playing", "ttt", p.myMark === "X" ? "host" : "guest")
+          p.game === "ttt" || p.game === "c4"
+            ? makeState("playing", p.game, roleOf(p))
             : p
         );
       })
@@ -258,6 +328,19 @@ export function useCoupleGame(coupleId: string, meId: string): CoupleGame {
     [send]
   );
 
+  const dropC4 = useCallback(
+    (col: number) => {
+      const s = stateRef.current;
+      if (s.phase !== "playing" || s.game !== "c4" || s.c4Result || s.c4Disc !== s.c4Turn) return;
+      // Ignore taps on a full column.
+      if (s.c4board[col]) return;
+      const disc = s.c4Disc;
+      setState((p) => applyC4Drop(p, col, disc));
+      send("c4_move", { col, disc });
+    },
+    [send]
+  );
+
   const nextRound = useCallback(() => {
     setState((p) => (p.game === "rps" ? { ...p, myThrow: null, theirThrow: null, scored: false } : p));
     send("rps_next");
@@ -265,9 +348,7 @@ export function useCoupleGame(coupleId: string, meId: string): CoupleGame {
 
   const rematch = useCallback(() => {
     setState((p) =>
-      p.game === "ttt" && p.myMark
-        ? makeState("playing", "ttt", p.myMark === "X" ? "host" : "guest")
-        : p
+      p.game === "ttt" || p.game === "c4" ? makeState("playing", p.game, roleOf(p)) : p
     );
     send("rematch");
   }, [send]);
@@ -289,6 +370,10 @@ export function useCoupleGame(coupleId: string, meId: string): CoupleGame {
     theirThrow: state.theirThrow,
     myScore: state.myScore,
     theirScore: state.theirScore,
+    c4board: state.c4board,
+    c4Disc: state.c4Disc,
+    c4Turn: state.c4Turn,
+    c4Result: state.c4Result,
     declined: state.declined,
     open,
     choose,
@@ -297,6 +382,7 @@ export function useCoupleGame(coupleId: string, meId: string): CoupleGame {
     decline,
     play,
     throwRps,
+    dropC4,
     nextRound,
     rematch,
     close,
@@ -382,6 +468,9 @@ export default function GameModal({
         {phase === "playing" && game.game === "ttt" && (
           <TttBoard game={game} partnerName={partnerName} />
         )}
+        {phase === "playing" && game.game === "c4" && (
+          <C4Board game={game} partnerName={partnerName} />
+        )}
         {phase === "playing" && game.game === "rps" && (
           <RpsBoard game={game} partnerName={partnerName} />
         )}
@@ -440,6 +529,73 @@ function TttBoard({ game, partnerName }: { game: CoupleGame; partnerName: string
       <div className="mt-6 flex gap-3">
         <Btn variant="ghost" onClick={game.close}>Close</Btn>
         {tttResult && <Btn variant="primary" onClick={game.rematch}>Play again</Btn>}
+      </div>
+    </div>
+  );
+}
+
+function C4Board({ game, partnerName }: { game: CoupleGame; partnerName: string }) {
+  const { c4board, c4Disc, c4Turn, c4Result } = game;
+  const myTurn = !c4Result && c4Turn === c4Disc;
+  const myColorName = c4Disc === "R" ? "Red" : "Yellow";
+
+  let status: string;
+  let tone = "text-neutral-500";
+  if (c4Result === "draw") {
+    status = "It’s a draw 🤝";
+  } else if (c4Result) {
+    const iWon = c4Result === c4Disc;
+    status = iWon ? "You win! 🎉" : `${partnerName} wins 😄`;
+    tone = iWon ? "text-emerald-500" : "text-fuchsia-500";
+  } else if (myTurn) {
+    status = "Your turn — tap a column";
+    tone = "text-emerald-500";
+  } else {
+    status = `${partnerName}’s turn…`;
+  }
+
+  const discColor = (d: Disc | null) =>
+    d === "R" ? "bg-red-500" : d === "Y" ? "bg-yellow-400" : "bg-white dark:bg-neutral-900";
+
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between">
+        <p className="font-semibold text-neutral-900 dark:text-neutral-100">Connect Four</p>
+        <p className="text-xs text-neutral-400">
+          You are{" "}
+          <span className={c4Disc === "R" ? "text-red-500" : "text-yellow-500"}>{myColorName}</span>
+        </p>
+      </div>
+      <p className={`mb-3 text-sm font-medium ${tone}`}>{status}</p>
+
+      <div className="mx-auto grid grid-cols-7 gap-1 rounded-2xl bg-blue-600 p-1.5">
+        {Array.from({ length: C4_COLS }).map((_, col) => {
+          const colFull = Boolean(c4board[col]);
+          return (
+            <button
+              key={col}
+              type="button"
+              onClick={() => game.dropC4(col)}
+              disabled={!myTurn || colFull}
+              aria-label={`Drop in column ${col + 1}`}
+              className="flex flex-col gap-1 rounded-md p-0 transition active:scale-95 disabled:active:scale-100"
+            >
+              {Array.from({ length: C4_ROWS }).map((__, row) => (
+                <span
+                  key={row}
+                  className={`block aspect-square w-full rounded-full ${discColor(
+                    c4board[row * C4_COLS + col]
+                  )}`}
+                />
+              ))}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="mt-5 flex gap-3">
+        <Btn variant="ghost" onClick={game.close}>Close</Btn>
+        {c4Result && <Btn variant="primary" onClick={game.rematch}>Play again</Btn>}
       </div>
     </div>
   );
