@@ -9,6 +9,7 @@ import type { Message, MessageKind, Reaction } from "@/lib/types";
 import ChatHeader from "@/components/ChatHeader";
 import MessageBubble from "@/components/MessageBubble";
 import Composer from "@/components/Composer";
+import GameModal, { useCoupleGame } from "@/components/GameModal";
 
 interface Props {
   coupleId: string;
@@ -45,6 +46,7 @@ export default function ChatRoom({
   const [wallpaper, setWallpaper] = useState("");
 
   const { startCall } = useCall();
+  const game = useCoupleGame(coupleId, meId);
 
   const roomChannelRef = useRef<RealtimeChannel | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -323,6 +325,7 @@ export default function ChatRoom({
         onSetDisappear={setDisappear}
         onAudioCall={() => startCall(coupleId, partnerName, false)}
         onVideoCall={() => startCall(coupleId, partnerName, true)}
+        onPlayGame={game.invite}
         onToggleSearch={() => {
           setSearchOpen((s) => !s);
           setQuery("");
@@ -404,6 +407,7 @@ export default function ChatRoom({
         onSubmitEdit={submitEdit}
       />
     </div>
+    <GameModal game={game} partnerName={partnerName} />
     </div>
   );
 }
