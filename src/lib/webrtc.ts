@@ -7,6 +7,8 @@ export type CallStatus =
   | "idle"
   | "calling"
   | "incoming"
+  | "connecting"
+  | "reconnecting"
   | "connected"
   | "ended";
 
@@ -14,6 +16,7 @@ export type CallSignal =
   | { kind: "offer"; sdp: RTCSessionDescriptionInit; video: boolean }
   | { kind: "answer"; sdp: RTCSessionDescriptionInit }
   | { kind: "ice"; candidate: RTCIceCandidateInit }
+  | { kind: "busy" }
   | { kind: "end" };
 
 export interface CallCallbacks {
@@ -22,6 +25,7 @@ export interface CallCallbacks {
   onLocalStream: (stream: MediaStream | null) => void;
   onRemoteStream: (stream: MediaStream | null) => void;
   onVideoChange: (video: boolean) => void;
+  onError: (message: string) => void;
 }
 
 function iceServers(): RTCIceServer[] {
@@ -72,6 +76,10 @@ export class CallManager {
   // queued here, then applied once it is — otherwise calls fail to connect.
   private pendingCandidates: RTCIceCandidateInit[] = [];
   private cb: CallCallbacks;
+  // Grace timer: a "disconnected" state is often a brief mobile blip, so we wait
+  // before declaring the call dead.
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private facing: "user" | "environment" = "user";
 
   constructor(cb: CallCallbacks) {
     this.cb = cb;
@@ -89,12 +97,24 @@ export class CallManager {
     };
 
     pc.onconnectionstatechange = () => {
-      if (pc.connectionState === "connected") this.cb.onStatus("connected");
-      if (
-        pc.connectionState === "failed" ||
-        pc.connectionState === "disconnected" ||
-        pc.connectionState === "closed"
-      ) {
+      const st = pc.connectionState;
+      if (st === "connected") {
+        if (this.reconnectTimer) {
+          clearTimeout(this.reconnectTimer);
+          this.reconnectTimer = null;
+        }
+        this.cb.onStatus("connected");
+      } else if (st === "disconnected") {
+        // Likely a transient blip (common on mobile data). Show "reconnecting"
+        // and only give up if it doesn't recover within the grace window.
+        this.cb.onStatus("reconnecting");
+        if (!this.reconnectTimer) {
+          this.reconnectTimer = setTimeout(() => {
+            this.reconnectTimer = null;
+            if (this.pc && this.pc.connectionState !== "connected") this.hangup();
+          }, 12000);
+        }
+      } else if (st === "failed" || st === "closed") {
         this.cleanup();
         this.cb.onStatus("ended");
       }
@@ -107,19 +127,36 @@ export class CallManager {
   private async getMedia(video: boolean) {
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: true,
-      video,
+      video: video ? { facingMode: this.facing } : false,
     });
     this.localStream = stream;
     this.cb.onLocalStream(stream);
     return stream;
   }
 
+  private mediaError(video: boolean) {
+    this.cleanup();
+    this.cb.onError(
+      video
+        ? "Couldn’t access your camera or microphone. Check app permissions."
+        : "Couldn’t access your microphone. Check app permissions."
+    );
+    this.cb.onStatus("ended");
+  }
+
   // Place an outgoing call.
   async start(video: boolean) {
+    this.facing = "user";
     this.cb.onVideoChange(video);
     this.cb.onStatus("calling");
     const pc = this.createPeer();
-    const stream = await this.getMedia(video);
+    let stream: MediaStream;
+    try {
+      stream = await this.getMedia(video);
+    } catch {
+      this.mediaError(video);
+      return;
+    }
     stream.getTracks().forEach((t) => pc.addTrack(t, stream));
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
@@ -130,9 +167,18 @@ export class CallManager {
   async accept() {
     if (!this.pendingOffer) return;
     const { sdp, video } = this.pendingOffer;
+    this.facing = "user";
     this.cb.onVideoChange(video);
+    this.cb.onStatus("connecting");
     const pc = this.createPeer();
-    const stream = await this.getMedia(video);
+    let stream: MediaStream;
+    try {
+      stream = await this.getMedia(video);
+    } catch {
+      this.mediaError(video);
+      this.cb.send({ kind: "end" });
+      return;
+    }
     stream.getTracks().forEach((t) => pc.addTrack(t, stream));
     await pc.setRemoteDescription(new RTCSessionDescription(sdp));
     await this.flushCandidates();
@@ -140,6 +186,32 @@ export class CallManager {
     await pc.setLocalDescription(answer);
     this.cb.send({ kind: "answer", sdp: answer });
     this.pendingOffer = null;
+  }
+
+  // Switch between front and back cameras during a video call.
+  async switchCamera(): Promise<"user" | "environment"> {
+    if (!this.pc || !this.localStream) return this.facing;
+    const old = this.localStream.getVideoTracks()[0];
+    if (!old) return this.facing;
+    const next = this.facing === "user" ? "environment" : "user";
+    try {
+      const ns = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: next },
+        audio: false,
+      });
+      const nt = ns.getVideoTracks()[0];
+      nt.enabled = old.enabled;
+      const sender = this.pc.getSenders().find((s) => s.track?.kind === "video");
+      await sender?.replaceTrack(nt);
+      old.stop();
+      this.localStream.removeTrack(old);
+      this.localStream.addTrack(nt);
+      this.cb.onLocalStream(this.localStream);
+      this.facing = next;
+    } catch {
+      // Device may not have a second camera — keep the current one.
+    }
+    return this.facing;
   }
 
   private async flushCandidates() {
@@ -183,6 +255,11 @@ export class CallManager {
           this.pendingCandidates.push(signal.candidate);
         }
         break;
+      case "busy":
+        this.cleanup();
+        this.cb.onError("Your partner is on another call.");
+        this.cb.onStatus("ended");
+        break;
       case "end":
         this.cleanup();
         this.cb.onStatus("ended");
@@ -212,6 +289,10 @@ export class CallManager {
   }
 
   private cleanup() {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     this.localStream?.getTracks().forEach((t) => t.stop());
     this.localStream = null;
     this.pendingOffer = null;

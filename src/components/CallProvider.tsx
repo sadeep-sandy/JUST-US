@@ -12,6 +12,7 @@ import {
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
 import { CallManager, type CallSignal, type CallStatus } from "@/lib/webrtc";
+import { startRinging, stopRinging } from "@/lib/ringtone";
 import CallModal from "@/components/CallModal";
 
 interface CallContextValue {
@@ -37,6 +38,10 @@ export default function CallProvider({
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [peerName, setPeerName] = useState("Partner");
+  // A transient end-of-call message (e.g. "No answer", "Busy", a permission
+  // error) shown briefly after the call screen would otherwise close.
+  const [note, setNote] = useState<string | null>(null);
+  const [selfMirror, setSelfMirror] = useState(true);
 
   const channelsRef = useRef<Map<string, RealtimeChannel>>(new Map());
   const nameByCouple = useRef<Map<string, string>>(new Map());
@@ -71,6 +76,7 @@ export default function CallProvider({
       onLocalStream: setLocalStream,
       onRemoteStream: setRemoteStream,
       onVideoChange: setVideo,
+      onError: setNote,
     });
     callRef.current = manager;
     return () => manager.hangup();
@@ -109,14 +115,22 @@ export default function CallProvider({
             if (payload?.from === userId) return;
             const sig = payload.signal as CallSignal;
             if (sig.kind === "offer") {
-              // Ignore a new incoming call while already in one.
-              if (activeCoupleRef.current && status !== "idle" && status !== "ended")
+              // Already on a call → tell the caller we're busy and don't ring.
+              if (activeCoupleRef.current && status !== "idle" && status !== "ended") {
+                channelsRef.current.get(c.id)?.send({
+                  type: "broadcast",
+                  event: "signal",
+                  payload: { from: userId, signal: { kind: "busy" } },
+                });
                 return;
+              }
               activeCoupleRef.current = c.id;
               setPeerName(nameByCouple.current.get(c.id) ?? "Partner");
               isCallerRef.current = false;
               connectedAtRef.current = null;
               loggedRef.current = false;
+              setNote(null);
+              setSelfMirror(true);
             }
             callRef.current?.handleSignal(sig);
           })
@@ -160,8 +174,37 @@ export default function CallProvider({
     }
   }, [status, video, supabase, userId]);
 
+  // Ring while a call is incoming, ringback while we're calling out.
+  useEffect(() => {
+    if (status === "incoming") startRinging("incoming");
+    else if (status === "calling") startRinging("outgoing");
+    else stopRinging();
+    return () => stopRinging();
+  }, [status]);
+
+  // Auto-end an unanswered outgoing call after 35s with a "No answer" note.
+  useEffect(() => {
+    if (status !== "calling") return;
+    const t = setTimeout(() => {
+      setNote("No answer");
+      callRef.current?.hangup();
+    }, 35000);
+    return () => clearTimeout(t);
+  }, [status]);
+
+  // Clear the transient end-of-call note shortly after it shows.
+  useEffect(() => {
+    if (!note) return;
+    const t = setTimeout(() => setNote(null), 2600);
+    return () => clearTimeout(t);
+  }, [note]);
+
   const inCall =
-    status === "calling" || status === "incoming" || status === "connected";
+    status === "calling" ||
+    status === "incoming" ||
+    status === "connecting" ||
+    status === "reconnecting" ||
+    status === "connected";
 
   // Keep audio alive when the screen turns off or the app is backgrounded.
   // Two mobile-browser hazards during a call:
@@ -248,6 +291,8 @@ export default function CallProvider({
       isCallerRef.current = true;
       connectedAtRef.current = null;
       loggedRef.current = false;
+      setNote(null);
+      setSelfMirror(true);
       callRef.current?.start(v);
     },
     []
@@ -256,17 +301,23 @@ export default function CallProvider({
   return (
     <CallContext.Provider value={{ startCall }}>
       {children}
-      {inCall && (
+      {(inCall || note) && (
         <CallModal
           status={status}
           video={video}
           partnerName={peerName}
           localStream={localStream}
           remoteStream={remoteStream}
+          note={note}
+          mirrorLocal={selfMirror}
           onAccept={() => callRef.current?.accept()}
           onHangup={() => callRef.current?.hangup()}
           onToggleMute={() => callRef.current?.toggleMute() ?? false}
           onToggleCamera={() => callRef.current?.toggleCamera() ?? false}
+          onFlipCamera={async () => {
+            const f = await callRef.current?.switchCamera();
+            if (f) setSelfMirror(f === "user");
+          }}
         />
       )}
     </CallContext.Provider>

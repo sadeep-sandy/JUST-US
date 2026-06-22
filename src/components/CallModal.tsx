@@ -9,10 +9,13 @@ interface Props {
   partnerName: string;
   localStream: MediaStream | null;
   remoteStream: MediaStream | null;
+  note?: string | null;
+  mirrorLocal?: boolean;
   onAccept: () => void;
   onHangup: () => void;
   onToggleMute: () => boolean;
   onToggleCamera: () => boolean;
+  onFlipCamera?: () => void;
 }
 
 export default function CallModal({
@@ -21,10 +24,13 @@ export default function CallModal({
   partnerName,
   localStream,
   remoteStream,
+  note,
+  mirrorLocal = false,
   onAccept,
   onHangup,
   onToggleMute,
   onToggleCamera,
+  onFlipCamera,
 }: Props) {
   const localRef = useRef<HTMLVideoElement | null>(null);
   const remoteRef = useRef<HTMLVideoElement | null>(null);
@@ -35,12 +41,12 @@ export default function CallModal({
   // loudspeaker. `speaker = true` means loudspeaker.
   const [speaker, setSpeaker] = useState(video);
   const routedRef = useRef(false);
-  const [seconds, setSeconds] = useState(0);
+  // A bare counter we bump on a timer to force re-renders; the actual values
+  // (duration, hangup-arm) are derived from timestamps during render so we never
+  // call setState synchronously inside an effect.
+  const [, setTick] = useState(0);
   const startRef = useRef<number | null>(null);
-  // Guard against an accidental tap right after the call connects: the controls
-  // layout shifts (Answer's slot becomes End call), so for a brief moment we
-  // ignore taps on "End call" to avoid hanging up the call by mistake.
-  const [hangupArmed, setHangupArmed] = useState(true);
+  const connectedAtRef = useRef<number | null>(null);
 
   // Best-effort output routing: tries to switch the remote audio between the
   // loudspeaker and the earpiece. Works where the browser exposes outputs.
@@ -80,8 +86,6 @@ export default function CallModal({
       applySpeaker(video);
     }
     if (status !== "connected") routedRef.current = false;
-    // applySpeaker is stable enough for this one-shot apply.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [status, remoteStream, video]);
 
   useEffect(() => {
@@ -110,34 +114,37 @@ export default function CallModal({
     return () => document.removeEventListener("visibilitychange", resume);
   }, []);
 
-  // When the call connects, briefly disarm the End-call button so a stray
-  // second tap (left over from tapping Answer) can't immediately hang up.
+  // When the call connects, briefly disarm the End-call button so a stray second
+  // tap (left over from tapping Answer) can't immediately hang up. Re-render once
+  // after the window so the button re-enables.
   useEffect(() => {
     if (status !== "connected") {
-      setHangupArmed(true);
+      connectedAtRef.current = null;
       return;
     }
-    setHangupArmed(false);
-    const t = setTimeout(() => setHangupArmed(true), 800);
+    if (connectedAtRef.current === null) connectedAtRef.current = Date.now();
+    const t = setTimeout(() => setTick((n) => n + 1), 800);
     return () => clearTimeout(t);
   }, [status]);
 
-  // Count up call duration once connected. Derived from a start timestamp so it
-  // stays accurate even if the timer is throttled while backgrounded.
+  // Tick once a second while connected so the derived duration updates.
   useEffect(() => {
-    if (status !== "connected") {
+    if (status !== "connected" && status !== "reconnecting") {
       startRef.current = null;
-      setSeconds(0);
       return;
     }
     if (startRef.current === null) startRef.current = Date.now();
-    const tick = () =>
-      setSeconds(Math.floor((Date.now() - (startRef.current ?? Date.now())) / 1000));
-    tick();
-    const t = setInterval(tick, 1000);
+    const t = setInterval(() => setTick((n) => n + 1), 1000);
     return () => clearInterval(t);
   }, [status]);
 
+  const hangupArmed =
+    status !== "connected" ||
+    (connectedAtRef.current !== null && Date.now() - connectedAtRef.current >= 800);
+
+  const seconds = startRef.current
+    ? Math.max(0, Math.floor((Date.now() - startRef.current) / 1000))
+    : 0;
   const durationLabel = `${Math.floor(seconds / 60)}:${(seconds % 60)
     .toString()
     .padStart(2, "0")}`;
@@ -147,9 +154,16 @@ export default function CallModal({
       ? "Calling…"
       : status === "incoming"
         ? `${partnerName} is calling`
-        : status === "connected"
-          ? durationLabel
-          : "";
+        : status === "connecting"
+          ? "Connecting…"
+          : status === "reconnecting"
+            ? "Reconnecting…"
+            : status === "connected"
+              ? durationLabel
+              : "";
+
+  // A transient note (No answer / Busy / permission error) takes over the line.
+  const statusLine = note || label;
 
   const initial = partnerName.charAt(0).toUpperCase();
 
@@ -189,13 +203,15 @@ export default function CallModal({
             autoPlay
             playsInline
             muted
-            className="absolute bottom-3 right-3 h-32 w-28 rounded-xl bg-black object-contain shadow-lg"
+            className={`absolute bottom-3 right-3 h-32 w-28 rounded-xl bg-black object-contain shadow-lg ${
+              mirrorLocal ? "-scale-x-100" : ""
+            }`}
           />
         )}
       </div>
 
       <div className="flex flex-col items-center gap-1 py-3">
-        <p className="text-rose-200">{label}</p>
+        <p className="text-rose-200">{statusLine}</p>
         {muted && status === "connected" && (
           <span className="rounded-full bg-white/15 px-2.5 py-0.5 text-xs text-white">
             🔇 You’re muted
@@ -204,7 +220,9 @@ export default function CallModal({
       </div>
 
       {/* Controls */}
-      {status === "incoming" ? (
+      {status === "ended" ? (
+        <div className="pb-6" />
+      ) : status === "incoming" ? (
         <div className="flex items-end justify-center gap-16 pb-4">
           <div className="flex flex-col items-center gap-2">
             <button
@@ -270,6 +288,19 @@ export default function CallModal({
             </div>
           )}
 
+          {video && onFlipCamera && (
+            <div className="flex flex-col items-center gap-1.5">
+              <button
+                onClick={onFlipCamera}
+                className={`grid h-14 w-14 place-items-center rounded-full bg-white/15 text-white active:bg-white/30 ${tap}`}
+                aria-label="Flip camera"
+              >
+                <FlipIcon />
+              </button>
+              <span className="text-[11px] text-white/70">Flip</span>
+            </div>
+          )}
+
           <div className="flex flex-col items-center gap-1.5">
             <button
               onClick={() => hangupArmed && onHangup()}
@@ -295,6 +326,15 @@ function PhoneIcon({ down = false }: { down?: boolean }) {
       fill="currentColor"
     >
       <path d="M6.62 10.79c1.44 2.83 3.76 5.14 6.59 6.59l2.2-2.2c.27-.27.67-.36 1.02-.24 1.12.37 2.33.57 3.57.57.55 0 1 .45 1 1V20c0 .55-.45 1-1 1-9.39 0-17-7.61-17-17 0-.55.45-1 1-1h3.5c.55 0 1 .45 1 1 0 1.24.2 2.45.57 3.57.11.35.03.74-.25 1.02l-2.2 2.18z" />
+    </svg>
+  );
+}
+
+function FlipIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 7h13l-2.5-2.5M21 17H8l2.5 2.5" />
+      <circle cx="12" cy="12" r="2.5" />
     </svg>
   );
 }
