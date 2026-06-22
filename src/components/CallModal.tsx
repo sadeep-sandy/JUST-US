@@ -35,6 +35,8 @@ export default function CallModal({
   // loudspeaker. `speaker = true` means loudspeaker.
   const [speaker, setSpeaker] = useState(video);
   const routedRef = useRef(false);
+  const [seconds, setSeconds] = useState(0);
+  const startRef = useRef<number | null>(null);
   // Guard against an accidental tap right after the call connects: the controls
   // layout shifts (Answer's slot becomes End call), so for a brief moment we
   // ignore taps on "End call" to avoid hanging up the call by mistake.
@@ -120,13 +122,33 @@ export default function CallModal({
     return () => clearTimeout(t);
   }, [status]);
 
+  // Count up call duration once connected. Derived from a start timestamp so it
+  // stays accurate even if the timer is throttled while backgrounded.
+  useEffect(() => {
+    if (status !== "connected") {
+      startRef.current = null;
+      setSeconds(0);
+      return;
+    }
+    if (startRef.current === null) startRef.current = Date.now();
+    const tick = () =>
+      setSeconds(Math.floor((Date.now() - (startRef.current ?? Date.now())) / 1000));
+    tick();
+    const t = setInterval(tick, 1000);
+    return () => clearInterval(t);
+  }, [status]);
+
+  const durationLabel = `${Math.floor(seconds / 60)}:${(seconds % 60)
+    .toString()
+    .padStart(2, "0")}`;
+
   const label =
     status === "calling"
       ? "Calling…"
       : status === "incoming"
         ? `${partnerName} is calling`
         : status === "connected"
-          ? "Connected"
+          ? durationLabel
           : "";
 
   const initial = partnerName.charAt(0).toUpperCase();
