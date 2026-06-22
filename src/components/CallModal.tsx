@@ -194,7 +194,14 @@ export default function CallModal({
         )}
       </div>
 
-      <p className="py-3 text-rose-200">{label}</p>
+      <div className="flex flex-col items-center gap-1 py-3">
+        <p className="text-rose-200">{label}</p>
+        {muted && status === "connected" && (
+          <span className="rounded-full bg-white/15 px-2.5 py-0.5 text-xs text-white">
+            🔇 You’re muted
+          </span>
+        )}
+      </div>
 
       {/* Controls */}
       {status === "incoming" ? (
@@ -221,44 +228,59 @@ export default function CallModal({
           </div>
         </div>
       ) : (
-        <div className="flex items-center gap-5 pb-2">
-          <button
-            onClick={() => setMuted(onToggleMute())}
-            className={`grid h-14 w-14 place-items-center rounded-full ${tap} ${
-              muted ? "bg-white text-neutral-900" : "bg-white/15 text-white active:bg-white/30"
-            }`}
-            aria-label="Mute"
-          >
-            <MicIcon off={muted} />
-          </button>
-          <button
-            onClick={() => applySpeaker(!speaker)}
-            className={`grid h-14 w-14 place-items-center rounded-full ${tap} ${
-              speaker ? "bg-white text-neutral-900" : "bg-white/15 text-white active:bg-white/30"
-            }`}
-            aria-label={speaker ? "Speaker on" : "Speaker off"}
-          >
-            <SpeakerIcon off={!speaker} />
-          </button>
-          {video && (
+        <div className="flex items-end justify-center gap-5 pb-2">
+          <div className="flex flex-col items-center gap-1.5">
             <button
-              onClick={() => setCamOff(onToggleCamera())}
+              onClick={() => setMuted(onToggleMute())}
               className={`grid h-14 w-14 place-items-center rounded-full ${tap} ${
-                camOff ? "bg-white text-neutral-900" : "bg-white/15 text-white active:bg-white/30"
+                muted ? "bg-white text-neutral-900" : "bg-white/15 text-white active:bg-white/30"
               }`}
-              aria-label="Toggle camera"
+              aria-label={muted ? "Unmute" : "Mute"}
             >
-              <CameraIcon off={camOff} />
+              <MicIcon off={muted} />
             </button>
+            <span className="text-[11px] text-white/70">{muted ? "Unmute" : "Mute"}</span>
+          </div>
+
+          <div className="flex flex-col items-center gap-1.5">
+            <button
+              onClick={() => applySpeaker(!speaker)}
+              className={`grid h-14 w-14 place-items-center rounded-full ${tap} ${
+                speaker ? "bg-white text-neutral-900" : "bg-white/15 text-white active:bg-white/30"
+              }`}
+              aria-label={speaker ? "Switch to earpiece" : "Switch to speaker"}
+            >
+              <SpeakerIcon off={!speaker} />
+            </button>
+            <span className="text-[11px] text-white/70">{speaker ? "Speaker" : "Earpiece"}</span>
+          </div>
+
+          {video && (
+            <div className="flex flex-col items-center gap-1.5">
+              <button
+                onClick={() => setCamOff(onToggleCamera())}
+                className={`grid h-14 w-14 place-items-center rounded-full ${tap} ${
+                  camOff ? "bg-white text-neutral-900" : "bg-white/15 text-white active:bg-white/30"
+                }`}
+                aria-label={camOff ? "Turn camera on" : "Turn camera off"}
+              >
+                <CameraIcon off={camOff} />
+              </button>
+              <span className="text-[11px] text-white/70">{camOff ? "Camera on" : "Camera"}</span>
+            </div>
           )}
-          <button
-            onClick={() => hangupArmed && onHangup()}
-            disabled={!hangupArmed}
-            className={`grid h-16 w-16 place-items-center rounded-full bg-red-600 text-white shadow-lg active:bg-red-700 disabled:opacity-50 ${tap}`}
-            aria-label="End call"
-          >
-            <PhoneIcon down />
-          </button>
+
+          <div className="flex flex-col items-center gap-1.5">
+            <button
+              onClick={() => hangupArmed && onHangup()}
+              disabled={!hangupArmed}
+              className={`grid h-16 w-16 place-items-center rounded-full bg-red-600 text-white shadow-lg active:bg-red-700 disabled:opacity-50 ${tap}`}
+              aria-label="End call"
+            >
+              <PhoneIcon down />
+            </button>
+            <span className="text-[11px] text-white/70">End</span>
+          </div>
         </div>
       )}
     </div>
