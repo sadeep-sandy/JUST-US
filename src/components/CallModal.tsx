@@ -31,8 +31,10 @@ export default function CallModal({
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
   const [muted, setMuted] = useState(false);
   const [camOff, setCamOff] = useState(false);
-  // Voice calls default to speaker (web default); video calls default to speaker too.
-  const [speaker, setSpeaker] = useState(true);
+  // Voice calls start on the earpiece (hold to your ear); video starts on the
+  // loudspeaker. `speaker = true` means loudspeaker.
+  const [speaker, setSpeaker] = useState(video);
+  const routedRef = useRef(false);
   // Guard against an accidental tap right after the call connects: the controls
   // layout shifts (Answer's slot becomes End call), so for a brief moment we
   // ignore taps on "End call" to avoid hanging up the call by mistake.
@@ -66,6 +68,19 @@ export default function CallModal({
   useEffect(() => {
     if (localRef.current && localStream) localRef.current.srcObject = localStream;
   }, [localStream]);
+
+  // Apply the initial audio routing once the call connects: earpiece for voice
+  // calls, loudspeaker for video. (Previously routing only happened when the
+  // speaker button was tapped, so every call began on the loudspeaker.)
+  useEffect(() => {
+    if (status === "connected" && remoteStream && !routedRef.current) {
+      routedRef.current = true;
+      applySpeaker(video);
+    }
+    if (status !== "connected") routedRef.current = false;
+    // applySpeaker is stable enough for this one-shot apply.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status, remoteStream, video]);
 
   useEffect(() => {
     if (remoteRef.current && remoteStream)
