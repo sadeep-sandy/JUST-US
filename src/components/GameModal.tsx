@@ -59,13 +59,36 @@ const BS_SHIPS = [3, 2, 2];
 // column, 56 = finished. Seat A enters at loop cell 0, seat B opposite at 26.
 const LU_A_START = 0;
 const LU_B_START = 26;
-const LU_SAFE = new Set([0, 13, 26, 39]);
+const LU_SAFE = new Set([0, 8, 13, 21, 26, 34, 39, 47]); // starts + star squares
 const luStart = (s: Seat) => (s === "A" ? LU_A_START : LU_B_START);
-function luPerim(i: number): [number, number] {
-  if (i < 14) return [0, i];
-  if (i < 27) return [i - 13, 13];
-  if (i < 40) return [13, 13 - (i - 26)];
-  return [13 - (i - 39), 0];
+
+// The 52-cell main loop as [row, col] on a 15×15 Ludo board, clockwise from the
+// red start. Seat A (red, top-left) enters at index 0; seat B (yellow,
+// bottom-right) at index 26 — diagonally opposite, the classic 2-player setup.
+const LU_PATH: [number, number][] = [
+  [6, 1], [6, 2], [6, 3], [6, 4], [6, 5],
+  [5, 6], [4, 6], [3, 6], [2, 6], [1, 6], [0, 6],
+  [0, 7], [0, 8],
+  [1, 8], [2, 8], [3, 8], [4, 8], [5, 8],
+  [6, 9], [6, 10], [6, 11], [6, 12], [6, 13], [6, 14],
+  [7, 14], [8, 14],
+  [8, 13], [8, 12], [8, 11], [8, 10], [8, 9],
+  [9, 8], [10, 8], [11, 8], [12, 8], [13, 8], [14, 8],
+  [14, 7], [14, 6],
+  [13, 6], [12, 6], [11, 6], [10, 6], [9, 6],
+  [8, 5], [8, 4], [8, 3], [8, 2], [8, 1], [8, 0],
+  [7, 0], [6, 0],
+];
+const LU_BASE_SLOTS: Record<Seat, [number, number][]> = {
+  A: [[1, 1], [1, 4], [4, 1], [4, 4]], // red base, top-left
+  B: [[10, 10], [10, 13], [13, 10], [13, 13]], // yellow base, bottom-right
+};
+// Board cell [row, col] for a token: base slot, loop cell, home column, or home.
+function luTokenCell(owner: Seat, p: number, slot: number): [number, number] {
+  if (p === -1) return LU_BASE_SLOTS[owner][slot];
+  if (p <= 50) return LU_PATH[(luStart(owner) + p) % 52];
+  if (p <= 55) return owner === "A" ? [7, p - 50] : [7, 14 - (p - 50)];
+  return owner === "A" ? [7, 6] : [7, 8]; // home
 }
 
 const LINES = [
@@ -1591,6 +1614,28 @@ function BsBoard({ game, partnerName }: { game: CoupleGame; partnerName: string 
   );
 }
 
+// Background colour for one cell of the 15×15 Ludo board.
+function luCellClass(r: number, c: number): string {
+  const border = "border border-black/10";
+  const baseInner = "bg-white";
+  if (r < 6 && c < 6) return r >= 1 && r <= 4 && c >= 1 && c <= 4 ? baseInner : "bg-red-500";
+  if (r < 6 && c > 8) return r >= 1 && r <= 4 && c >= 10 && c <= 13 ? baseInner : "bg-blue-500";
+  if (r > 8 && c < 6) return r >= 10 && r <= 13 && c >= 1 && c <= 4 ? baseInner : "bg-green-500";
+  if (r > 8 && c > 8) return r >= 10 && r <= 13 && c >= 10 && c <= 13 ? baseInner : "bg-yellow-400";
+  if (r >= 6 && r <= 8 && c >= 6 && c <= 8) return "bg-transparent"; // centre (pinwheel overlay)
+  if (r === 7 && c >= 1 && c <= 5) return `bg-red-400 ${border}`;
+  if (c === 7 && r >= 1 && r <= 5) return `bg-blue-400 ${border}`;
+  if (r === 7 && c >= 9 && c <= 13) return `bg-yellow-300 ${border}`;
+  if (c === 7 && r >= 9 && r <= 13) return `bg-green-400 ${border}`;
+  if (r === 6 && c === 1) return `bg-red-300 ${border}`;
+  if (r === 1 && c === 8) return `bg-blue-300 ${border}`;
+  if (r === 8 && c === 13) return `bg-yellow-200 ${border}`;
+  if (r === 13 && c === 6) return `bg-green-300 ${border}`;
+  return `bg-white ${border}`;
+}
+
+const LU_STARS = new Set(["2,6", "6,12", "12,8", "8,2", "6,1", "1,8", "8,13", "13,6"]);
+
 function LuBoard({ game, partnerName }: { game: CoupleGame; partnerName: string }) {
   const { luTokens, luSeat, luTurn, luDie, luResult } = game;
   const myTurn = !luResult && luTurn === luSeat;
@@ -1606,22 +1651,6 @@ function LuBoard({ game, partnerName }: { game: CoupleGame; partnerName: string 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [luDie, luTurn, tokenKey, luResult]);
 
-  const cellIdx = new Map<string, number>();
-  for (let i = 0; i < 52; i++) {
-    const [r, c] = luPerim(i);
-    cellIdx.set(`${r},${c}`, i);
-  }
-  const onLoop = new Map<number, Seat[]>();
-  luTokens.forEach((p, t) => {
-    if (p >= 0 && p <= 50) {
-      const owner: Seat = t < 4 ? "A" : "B";
-      const abs = (luStart(owner) + p) % 52;
-      const arr = onLoop.get(abs) ?? [];
-      arr.push(owner);
-      onLoop.set(abs, arr);
-    }
-  });
-
   let status: string;
   let tone = "text-neutral-500";
   if (luResult) {
@@ -1631,18 +1660,29 @@ function LuBoard({ game, partnerName }: { game: CoupleGame; partnerName: string 
   } else if (!myTurn) {
     status = `${partnerName}’s turn…`;
   } else if (luDie === null) {
-    status = "Your turn — roll!";
+    status = "Your turn — roll the dice!";
     tone = "text-emerald-500";
   } else if (movable.length === 0) {
     status = `Rolled ${luDie} — no moves`;
   } else {
-    status = `Rolled ${luDie} — pick a token`;
+    status = `Rolled ${luDie} — tap a glowing token`;
     tone = "text-emerald-500";
   }
 
-  const base = luSeat === "A" ? 0 : 4;
-  const luLabel = (p: number) =>
-    p === -1 ? "Base" : p === 56 ? "🏁" : p >= 51 ? `🏠${p - 50}` : `#${p}`;
+  // Place tokens and record stacking per cell so overlaps spread out.
+  const tokens = luTokens.map((p, t) => {
+    const owner: Seat = t < 4 ? "A" : "B";
+    const [row, col] = luTokenCell(owner, p, t % 4);
+    return { t, owner, row, col };
+  });
+  const stackAt = new Map<string, number[]>();
+  tokens.forEach(({ t, row, col }) => {
+    const key = `${row},${col}`;
+    stackAt.set(key, [...(stackAt.get(key) ?? []), t]);
+  });
+
+  const pct = 100 / 15;
+  const dieFace = ["", "⚀", "⚁", "⚂", "⚃", "⚄", "⚅"];
 
   return (
     <div>
@@ -1650,79 +1690,88 @@ function LuBoard({ game, partnerName }: { game: CoupleGame; partnerName: string 
         <p className="font-semibold text-neutral-900 dark:text-neutral-100">Ludo</p>
         <p className="text-xs text-neutral-400">
           You are{" "}
-          <span className={luSeat === "A" ? "text-red-500" : "text-blue-500"}>
-            {luSeat === "A" ? "Red" : "Blue"}
+          <span className={luSeat === "A" ? "text-red-500" : "text-yellow-500"}>
+            {luSeat === "A" ? "Red" : "Yellow"}
           </span>
         </p>
       </div>
       <p className={`mb-3 text-sm font-medium ${tone}`}>{status}</p>
 
-      <div
-        className="mx-auto mb-3 grid w-full max-w-[280px] gap-px"
-        style={{ gridTemplateColumns: "repeat(14, 1fr)" }}
-      >
-        {Array.from({ length: 14 * 14 }).map((_, k) => {
-          const r = Math.floor(k / 14);
-          const c = k % 14;
-          const idx = cellIdx.get(`${r},${c}`);
-          if (idx === undefined) {
+      <div className="relative mx-auto aspect-square w-full max-w-[320px] overflow-hidden rounded-lg shadow">
+        {/* Board background */}
+        <div className="grid h-full w-full" style={{ gridTemplateColumns: "repeat(15, 1fr)" }}>
+          {Array.from({ length: 225 }).map((_, k) => {
+            const r = Math.floor(k / 15);
+            const c = k % 15;
             return (
-              <span key={k} className="grid aspect-square place-items-center text-sm">
-                {r === 6 && c === 6 && luDie ? "🎲" : ""}
-              </span>
+              <div
+                key={k}
+                className={`flex items-center justify-center ${luCellClass(r, c)}`}
+              >
+                {LU_STARS.has(`${r},${c}`) && (
+                  <span className="text-[7px] leading-none text-black/40">★</span>
+                )}
+              </div>
             );
-          }
-          const owners = onLoop.get(idx);
-          const isStart = idx === LU_A_START || idx === LU_B_START;
-          const bg = isStart
-            ? idx === LU_A_START
-              ? "bg-red-200 dark:bg-red-500/30"
-              : "bg-blue-200 dark:bg-blue-500/30"
-            : LU_SAFE.has(idx)
-              ? "bg-amber-200 dark:bg-amber-500/30"
-              : "bg-neutral-100 dark:bg-neutral-800";
-          return (
-            <span key={k} className={`grid aspect-square place-items-center rounded-[2px] ${bg}`}>
-              {owners && owners.length > 0 && (
-                <span
-                  className={`h-[70%] w-[70%] rounded-full ${
-                    owners[0] === "A" ? "bg-red-500" : "bg-blue-500"
-                  } ${owners.length > 1 ? "ring-2 ring-white dark:ring-neutral-900" : ""}`}
-                />
-              )}
-            </span>
-          );
-        })}
-      </div>
+          })}
+        </div>
 
-      <div className="mb-3 grid grid-cols-4 gap-2">
-        {[0, 1, 2, 3].map((kk) => {
-          const t = base + kk;
-          const can = movable.includes(t);
+        {/* Centre pinwheel */}
+        <div
+          className="absolute"
+          style={{
+            left: `${6 * pct}%`,
+            top: `${6 * pct}%`,
+            width: `${3 * pct}%`,
+            height: `${3 * pct}%`,
+            background:
+              "conic-gradient(from 45deg, #ef4444 0 90deg, #facc15 90deg 180deg, #22c55e 180deg 270deg, #3b82f6 270deg 360deg)",
+          }}
+        />
+
+        {/* Tokens */}
+        {tokens.map(({ t, owner, row, col }) => {
+          const stack = stackAt.get(`${row},${col}`) ?? [t];
+          const idxIn = stack.indexOf(t);
+          const off = stack.length > 1 ? (idxIn - (stack.length - 1) / 2) * (pct * 0.5) : 0;
+          const can = owner === luSeat && movable.includes(t);
           return (
             <button
               key={t}
               type="button"
               disabled={!can}
               onClick={() => game.moveLu(t)}
-              className={`rounded-xl px-1 py-2 text-center text-xs font-semibold transition active:scale-95 ${
-                can ? "bg-emerald-500 text-white" : "bg-neutral-100 text-neutral-500 dark:bg-neutral-800"
-              }`}
+              className="absolute flex items-center justify-center p-0"
+              style={{
+                top: `${row * pct}%`,
+                left: `${col * pct + off}%`,
+                width: `${pct}%`,
+                height: `${pct}%`,
+              }}
             >
-              <span className="block text-sm">{luSeat === "A" ? "🔴" : "🔵"}</span>
-              {luLabel(luTokens[t])}
+              <span
+                className={`h-[80%] w-[80%] rounded-full border-2 border-white shadow-md ${
+                  owner === "A" ? "bg-red-500" : "bg-yellow-400"
+                } ${can ? "ring-2 ring-emerald-400" : ""}`}
+              />
             </button>
           );
         })}
       </div>
 
-      <div className="flex gap-3">
+      <div className="mt-3 flex items-center gap-3">
         <Btn variant="ghost" onClick={game.close}>Close</Btn>
         {luResult ? (
           <Btn variant="primary" onClick={game.rematch}>Play again</Btn>
         ) : myTurn && luDie === null ? (
-          <Btn variant="primary" onClick={game.rollLu}>🎲 Roll</Btn>
-        ) : null}
+          <Btn variant="primary" onClick={game.rollLu}>
+            🎲 Roll
+          </Btn>
+        ) : (
+          <div className="flex flex-1 items-center justify-center text-3xl">
+            {luDie ? dieFace[luDie] : ""}
+          </div>
+        )}
       </div>
     </div>
   );
