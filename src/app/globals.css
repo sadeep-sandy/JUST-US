@@ -87,6 +87,23 @@ select {
   }
 }
 
+/* Ludo dice: a quick tumble when a new value lands. */
+@keyframes lu-pop {
+  0% {
+    transform: scale(0.6) rotate(-18deg);
+    opacity: 0.4;
+  }
+  60% {
+    transform: scale(1.12) rotate(10deg);
+  }
+  100% {
+    transform: scale(1) rotate(0);
+  }
+}
+.lu-die-pop {
+  animation: lu-pop 0.35s ease-out;
+}
+
 /* Hide scrollbars in the chat thread but keep scrolling. */
 .no-scrollbar::-webkit-scrollbar {
   display: none;

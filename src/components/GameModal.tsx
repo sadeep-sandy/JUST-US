@@ -1636,6 +1636,31 @@ function luCellClass(r: number, c: number): string {
 
 const LU_STARS = new Set(["2,6", "6,12", "12,8", "8,2", "6,1", "1,8", "8,13", "13,6"]);
 
+// A real dice face with pip dots, laid out on a 3×3 grid.
+const DICE_PIPS: Record<number, number[]> = {
+  1: [4],
+  2: [0, 8],
+  3: [0, 4, 8],
+  4: [0, 2, 6, 8],
+  5: [0, 2, 4, 6, 8],
+  6: [0, 2, 3, 5, 6, 8],
+};
+function LuDice({ value }: { value: number }) {
+  const pips = DICE_PIPS[value] ?? [];
+  return (
+    <div
+      key={value}
+      className="lu-die-pop grid h-14 w-14 shrink-0 grid-cols-3 grid-rows-3 gap-0.5 rounded-2xl bg-white p-2 shadow-lg ring-1 ring-black/10"
+    >
+      {Array.from({ length: 9 }).map((_, i) => (
+        <span key={i} className="flex items-center justify-center">
+          {pips.includes(i) && <span className="h-2.5 w-2.5 rounded-full bg-neutral-900" />}
+        </span>
+      ))}
+    </div>
+  );
+}
+
 function LuBoard({ game, partnerName }: { game: CoupleGame; partnerName: string }) {
   const { luTokens, luSeat, luTurn, luDie, luResult } = game;
   const myTurn = !luResult && luTurn === luSeat;
@@ -1682,7 +1707,6 @@ function LuBoard({ game, partnerName }: { game: CoupleGame; partnerName: string 
   });
 
   const pct = 100 / 15;
-  const dieFace = ["", "⚀", "⚁", "⚂", "⚃", "⚄", "⚅"];
 
   return (
     <div>
@@ -1761,16 +1785,13 @@ function LuBoard({ game, partnerName }: { game: CoupleGame; partnerName: string 
 
       <div className="mt-3 flex items-center gap-3">
         <Btn variant="ghost" onClick={game.close}>Close</Btn>
+        {luDie !== null && <LuDice value={luDie} />}
         {luResult ? (
           <Btn variant="primary" onClick={game.rematch}>Play again</Btn>
         ) : myTurn && luDie === null ? (
-          <Btn variant="primary" onClick={game.rollLu}>
-            🎲 Roll
-          </Btn>
+          <Btn variant="primary" onClick={game.rollLu}>🎲 Roll</Btn>
         ) : (
-          <div className="flex flex-1 items-center justify-center text-3xl">
-            {luDie ? dieFace[luDie] : ""}
-          </div>
+          <span className="flex-1" />
         )}
       </div>
     </div>
