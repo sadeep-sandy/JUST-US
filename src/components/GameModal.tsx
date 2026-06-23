@@ -13,9 +13,10 @@ import { createClient } from "@/lib/supabase/client";
 // move handlers, and a <Board> renderer. Everything else is shared.
 // ---------------------------------------------------------------------------
 
-export type GameId = "ttt" | "rps" | "c4" | "db" | "mem" | "ck" | "bs";
+export type GameId = "ttt" | "rps" | "c4" | "db" | "mem" | "ck" | "bs" | "lu";
 
 export const GAMES: { id: GameId; name: string; emoji: string; blurb: string }[] = [
+  { id: "lu", name: "Ludo", emoji: "🎲", blurb: "Race your tokens home" },
   { id: "ttt", name: "Tic-Tac-Toe", emoji: "⭕", blurb: "Classic 3-in-a-row" },
   { id: "c4", name: "Connect Four", emoji: "🔴", blurb: "Drop 4 in a row" },
   { id: "ck", name: "Checkers", emoji: "♟️", blurb: "Jump and crown kings" },
@@ -52,6 +53,20 @@ type CkPiece = "" | "a" | "A" | "b" | "B";
 // Battleship: each player hides a fleet on their own secret grid.
 const BS_N = 6;
 const BS_SHIPS = [3, 2, 2];
+
+// Ludo (2-player): a 52-cell loop drawn on the perimeter of a 14×14 ring, then
+// a 6-cell home stretch. Token progress: -1 = base, 0..50 = loop, 51..55 = home
+// column, 56 = finished. Seat A enters at loop cell 0, seat B opposite at 26.
+const LU_A_START = 0;
+const LU_B_START = 26;
+const LU_SAFE = new Set([0, 13, 26, 39]);
+const luStart = (s: Seat) => (s === "A" ? LU_A_START : LU_B_START);
+function luPerim(i: number): [number, number] {
+  if (i < 14) return [0, i];
+  if (i < 27) return [i - 13, 13];
+  if (i < 40) return [13, 13 - (i - 26)];
+  return [13 - (i - 39), 0];
+}
 
 const LINES = [
   [0, 1, 2], [3, 4, 5], [6, 7, 8],
@@ -231,6 +246,74 @@ function bsRandomBoard(): number[] {
 const bsAllSunk = (board: number[], incoming: boolean[]) =>
   board.every((v, i) => v === 0 || incoming[i]);
 
+// ---- Ludo helpers ----
+function luMovable(tokens: number[], seat: Seat, die: number): number[] {
+  const base = seat === "A" ? 0 : 4;
+  const res: number[] = [];
+  for (let t = base; t < base + 4; t++) {
+    const p = tokens[t];
+    if (p === 56) continue;
+    if (p === -1) {
+      if (die === 6) res.push(t);
+    } else if (p + die <= 56) {
+      res.push(t);
+    }
+  }
+  return res;
+}
+
+function applyLuRoll(prev: GState, v: number): GState {
+  if (prev.game !== "lu" || prev.luDie !== null || prev.luResult) return prev;
+  return { ...prev, luDie: v };
+}
+
+function applyLuPass(prev: GState): GState {
+  if (prev.game !== "lu" || prev.luDie === null) return prev;
+  return { ...prev, luDie: null, luTurn: prev.luTurn === "A" ? "B" : "A" };
+}
+
+function applyLuMove(prev: GState, token: number): GState {
+  if (prev.game !== "lu" || prev.luDie === null || prev.luResult) return prev;
+  const die = prev.luDie;
+  const seat = prev.luTurn;
+  const base = seat === "A" ? 0 : 4;
+  if (token < base || token >= base + 4) return prev;
+  const tokens = prev.luTokens.slice();
+  let p = tokens[token];
+  if (p === -1) {
+    if (die !== 6) return prev;
+    p = 0;
+  } else {
+    if (p + die > 56) return prev;
+    p += die;
+  }
+  tokens[token] = p;
+
+  // Capture any opponent token sharing this loop cell (unless it's a safe cell).
+  let captured = false;
+  if (p >= 0 && p <= 50) {
+    const abs = (luStart(seat) + p) % 52;
+    if (!LU_SAFE.has(abs)) {
+      const opp: Seat = seat === "A" ? "B" : "A";
+      const ob = opp === "A" ? 0 : 4;
+      for (let o = ob; o < ob + 4; o++) {
+        const op = tokens[o];
+        if (op >= 0 && op <= 50 && (luStart(opp) + op) % 52 === abs) {
+          tokens[o] = -1;
+          captured = true;
+        }
+      }
+    }
+  }
+
+  const reachedHome = p === 56;
+  const allHome = [0, 1, 2, 3].every((k) => tokens[base + k] === 56);
+  const result: Seat | null = allHome ? seat : null;
+  const extra = die === 6 || captured || reachedHome; // roll again
+  const turn: Seat = extra ? seat : seat === "A" ? "B" : "A";
+  return { ...prev, luTokens: tokens, luDie: null, luTurn: turn, luResult: result };
+}
+
 interface GState {
   phase: Phase;
   game: GameId | null;
@@ -275,6 +358,12 @@ interface GState {
   bsSeat: Seat | null;
   bsTurn: Seat;
   bsResult: Seat | null;
+  // ludo
+  luTokens: number[];
+  luSeat: Seat | null;
+  luTurn: Seat;
+  luDie: number | null;
+  luResult: Seat | null;
   // shared
   declined: boolean;
 }
@@ -316,6 +405,11 @@ const FRESH = (): GState => ({
   bsSeat: null,
   bsTurn: "A",
   bsResult: null,
+  luTokens: Array(8).fill(-1),
+  luSeat: null,
+  luTurn: "A",
+  luDie: null,
+  luResult: null,
   declined: false,
 });
 
@@ -331,6 +425,7 @@ function makeState(phase: Phase, game: GameId, role: "host" | "guest"): GState {
     return { ...base, ckBoard: ckInitBoard(), ckSeat: role === "host" ? "A" : "B", ckTurn: "A" };
   if (game === "bs")
     return { ...base, bsBoard: bsRandomBoard(), bsSeat: role === "host" ? "A" : "B", bsTurn: "A" };
+  if (game === "lu") return { ...base, luSeat: role === "host" ? "A" : "B", luTurn: "A" };
   return base;
 }
 
@@ -342,6 +437,7 @@ function roleOf(p: GState): "host" | "guest" {
   if (p.game === "mem") return p.memSeat === "A" ? "host" : "guest";
   if (p.game === "ck") return p.ckSeat === "A" ? "host" : "guest";
   if (p.game === "bs") return p.bsSeat === "A" ? "host" : "guest";
+  if (p.game === "lu") return p.luSeat === "A" ? "host" : "guest";
   return p.myMark === "X" ? "host" : "guest";
 }
 
@@ -473,6 +569,11 @@ export interface CoupleGame {
   bsSeat: Seat | null;
   bsTurn: Seat;
   bsResult: Seat | null;
+  luTokens: number[];
+  luSeat: Seat | null;
+  luTurn: Seat;
+  luDie: number | null;
+  luResult: Seat | null;
   declined: boolean;
   open: () => void;
   choose: (game: GameId) => void;
@@ -487,6 +588,9 @@ export interface CoupleGame {
   resolveMem: () => void;
   playCk: (from: number, to: number) => void;
   fireBs: (i: number) => void;
+  rollLu: () => void;
+  moveLu: (token: number) => void;
+  passLu: () => void;
   nextRound: () => void;
   rematch: () => void;
   close: () => void;
@@ -604,6 +708,16 @@ export function useCoupleGame(coupleId: string, meId: string): CoupleGame {
           return { ...p, bsShots: shots, bsResult: lost ? p.bsSeat : p.bsResult };
         });
       })
+      .on("broadcast", { event: "lu_roll" }, ({ payload }) => {
+        const v = payload?.v as number;
+        if (typeof v !== "number") return;
+        setState((p) => applyLuRoll(p, v));
+      })
+      .on("broadcast", { event: "lu_move" }, ({ payload }) => {
+        const token = payload?.token as number;
+        if (typeof token !== "number") return;
+        setState((p) => applyLuMove(p, token));
+      })
       .on("broadcast", { event: "rps_next" }, () => {
         setState((p) =>
           p.game === "rps"
@@ -618,7 +732,8 @@ export function useCoupleGame(coupleId: string, meId: string): CoupleGame {
             p.game === "c4" ||
             p.game === "db" ||
             p.game === "ck" ||
-            p.game === "bs"
+            p.game === "bs" ||
+            p.game === "lu"
           ) {
             return makeState("playing", p.game, roleOf(p));
           }
@@ -767,6 +882,32 @@ export function useCoupleGame(coupleId: string, meId: string): CoupleGame {
     [send]
   );
 
+  const rollLu = useCallback(() => {
+    const s = stateRef.current;
+    if (s.phase !== "playing" || s.game !== "lu" || s.luResult) return;
+    if (s.luTurn !== s.luSeat || s.luDie !== null) return;
+    const v = Math.floor(Math.random() * 6) + 1;
+    setState((p) => applyLuRoll(p, v));
+    send("lu_roll", { v });
+  }, [send]);
+
+  const moveLu = useCallback(
+    (token: number) => {
+      const s = stateRef.current;
+      if (s.phase !== "playing" || s.game !== "lu" || s.luDie === null || s.luResult) return;
+      if (s.luTurn !== s.luSeat) return;
+      if (!luMovable(s.luTokens, s.luTurn, s.luDie).includes(token)) return;
+      setState((p) => applyLuMove(p, token));
+      send("lu_move", { token });
+    },
+    [send]
+  );
+
+  // Deterministic auto-pass when a roll has no legal moves (both phones run it).
+  const passLu = useCallback(() => {
+    setState((p) => applyLuPass(p));
+  }, []);
+
   const nextRound = useCallback(() => {
     setState((p) => (p.game === "rps" ? { ...p, myThrow: null, theirThrow: null, scored: false } : p));
     send("rps_next");
@@ -785,7 +926,8 @@ export function useCoupleGame(coupleId: string, meId: string): CoupleGame {
       p.game === "c4" ||
       p.game === "db" ||
       p.game === "ck" ||
-      p.game === "bs"
+      p.game === "bs" ||
+      p.game === "lu"
     ) {
       setState(makeState("playing", p.game, roleOf(p)));
       send("rematch");
@@ -834,6 +976,11 @@ export function useCoupleGame(coupleId: string, meId: string): CoupleGame {
     bsSeat: state.bsSeat,
     bsTurn: state.bsTurn,
     bsResult: state.bsResult,
+    luTokens: state.luTokens,
+    luSeat: state.luSeat,
+    luTurn: state.luTurn,
+    luDie: state.luDie,
+    luResult: state.luResult,
     declined: state.declined,
     open,
     choose,
@@ -848,6 +995,9 @@ export function useCoupleGame(coupleId: string, meId: string): CoupleGame {
     resolveMem,
     playCk,
     fireBs,
+    rollLu,
+    moveLu,
+    passLu,
     nextRound,
     rematch,
     close,
@@ -947,6 +1097,9 @@ export default function GameModal({
         )}
         {phase === "playing" && game.game === "bs" && (
           <BsBoard game={game} partnerName={partnerName} />
+        )}
+        {phase === "playing" && game.game === "lu" && (
+          <LuBoard game={game} partnerName={partnerName} />
         )}
         {phase === "playing" && game.game === "rps" && (
           <RpsBoard game={game} partnerName={partnerName} />
@@ -1433,6 +1586,143 @@ function BsBoard({ game, partnerName }: { game: CoupleGame; partnerName: string 
       <div className="mt-5 flex gap-3">
         <Btn variant="ghost" onClick={game.close}>Close</Btn>
         {bsResult && <Btn variant="primary" onClick={game.rematch}>Play again</Btn>}
+      </div>
+    </div>
+  );
+}
+
+function LuBoard({ game, partnerName }: { game: CoupleGame; partnerName: string }) {
+  const { luTokens, luSeat, luTurn, luDie, luResult } = game;
+  const myTurn = !luResult && luTurn === luSeat;
+  const movable = luDie !== null && myTurn ? luMovable(luTokens, luTurn, luDie) : [];
+
+  // Auto-pass a roll with no legal moves (both phones run this deterministically).
+  const tokenKey = luTokens.join(",");
+  useEffect(() => {
+    if (luDie === null || luResult) return;
+    if (luMovable(luTokens, luTurn, luDie).length > 0) return;
+    const t = setTimeout(() => game.passLu(), 1300);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [luDie, luTurn, tokenKey, luResult]);
+
+  const cellIdx = new Map<string, number>();
+  for (let i = 0; i < 52; i++) {
+    const [r, c] = luPerim(i);
+    cellIdx.set(`${r},${c}`, i);
+  }
+  const onLoop = new Map<number, Seat[]>();
+  luTokens.forEach((p, t) => {
+    if (p >= 0 && p <= 50) {
+      const owner: Seat = t < 4 ? "A" : "B";
+      const abs = (luStart(owner) + p) % 52;
+      const arr = onLoop.get(abs) ?? [];
+      arr.push(owner);
+      onLoop.set(abs, arr);
+    }
+  });
+
+  let status: string;
+  let tone = "text-neutral-500";
+  if (luResult) {
+    const iWon = luResult === luSeat;
+    status = iWon ? "You win! 🎉" : `${partnerName} wins 😄`;
+    tone = iWon ? "text-emerald-500" : "text-fuchsia-500";
+  } else if (!myTurn) {
+    status = `${partnerName}’s turn…`;
+  } else if (luDie === null) {
+    status = "Your turn — roll!";
+    tone = "text-emerald-500";
+  } else if (movable.length === 0) {
+    status = `Rolled ${luDie} — no moves`;
+  } else {
+    status = `Rolled ${luDie} — pick a token`;
+    tone = "text-emerald-500";
+  }
+
+  const base = luSeat === "A" ? 0 : 4;
+  const luLabel = (p: number) =>
+    p === -1 ? "Base" : p === 56 ? "🏁" : p >= 51 ? `🏠${p - 50}` : `#${p}`;
+
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between">
+        <p className="font-semibold text-neutral-900 dark:text-neutral-100">Ludo</p>
+        <p className="text-xs text-neutral-400">
+          You are{" "}
+          <span className={luSeat === "A" ? "text-red-500" : "text-blue-500"}>
+            {luSeat === "A" ? "Red" : "Blue"}
+          </span>
+        </p>
+      </div>
+      <p className={`mb-3 text-sm font-medium ${tone}`}>{status}</p>
+
+      <div
+        className="mx-auto mb-3 grid w-full max-w-[280px] gap-px"
+        style={{ gridTemplateColumns: "repeat(14, 1fr)" }}
+      >
+        {Array.from({ length: 14 * 14 }).map((_, k) => {
+          const r = Math.floor(k / 14);
+          const c = k % 14;
+          const idx = cellIdx.get(`${r},${c}`);
+          if (idx === undefined) {
+            return (
+              <span key={k} className="grid aspect-square place-items-center text-sm">
+                {r === 6 && c === 6 && luDie ? "🎲" : ""}
+              </span>
+            );
+          }
+          const owners = onLoop.get(idx);
+          const isStart = idx === LU_A_START || idx === LU_B_START;
+          const bg = isStart
+            ? idx === LU_A_START
+              ? "bg-red-200 dark:bg-red-500/30"
+              : "bg-blue-200 dark:bg-blue-500/30"
+            : LU_SAFE.has(idx)
+              ? "bg-amber-200 dark:bg-amber-500/30"
+              : "bg-neutral-100 dark:bg-neutral-800";
+          return (
+            <span key={k} className={`grid aspect-square place-items-center rounded-[2px] ${bg}`}>
+              {owners && owners.length > 0 && (
+                <span
+                  className={`h-[70%] w-[70%] rounded-full ${
+                    owners[0] === "A" ? "bg-red-500" : "bg-blue-500"
+                  } ${owners.length > 1 ? "ring-2 ring-white dark:ring-neutral-900" : ""}`}
+                />
+              )}
+            </span>
+          );
+        })}
+      </div>
+
+      <div className="mb-3 grid grid-cols-4 gap-2">
+        {[0, 1, 2, 3].map((kk) => {
+          const t = base + kk;
+          const can = movable.includes(t);
+          return (
+            <button
+              key={t}
+              type="button"
+              disabled={!can}
+              onClick={() => game.moveLu(t)}
+              className={`rounded-xl px-1 py-2 text-center text-xs font-semibold transition active:scale-95 ${
+                can ? "bg-emerald-500 text-white" : "bg-neutral-100 text-neutral-500 dark:bg-neutral-800"
+              }`}
+            >
+              <span className="block text-sm">{luSeat === "A" ? "🔴" : "🔵"}</span>
+              {luLabel(luTokens[t])}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="flex gap-3">
+        <Btn variant="ghost" onClick={game.close}>Close</Btn>
+        {luResult ? (
+          <Btn variant="primary" onClick={game.rematch}>Play again</Btn>
+        ) : myTurn && luDie === null ? (
+          <Btn variant="primary" onClick={game.rollLu}>🎲 Roll</Btn>
+        ) : null}
       </div>
     </div>
   );
