@@ -51,6 +51,12 @@ export default function ConversationList({
   const [query, setQuery] = useState("");
   useEffect(() => setMounted(true), []);
 
+  // Re-fetch fresh previews + unread counts every time we land on the inbox
+  // (e.g. returning from a chat), instead of showing a cached snapshot.
+  useEffect(() => {
+    router.refresh();
+  }, [router]);
+
   const q = query.trim().toLowerCase();
   const visible = q
     ? conversations.filter((c) => c.partnerName.toLowerCase().includes(q))
