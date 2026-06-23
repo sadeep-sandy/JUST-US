@@ -350,16 +350,25 @@ export default function ChatRoom({
   const now = Date.now();
   const notExpired = (m: Message) =>
     !m.expires_at || new Date(m.expires_at).getTime() > now;
+  // De-duplicate by id (realtime can redeliver) and always show messages in true
+  // chronological order, so a late/out-of-order arrival can never jump into the
+  // middle of the thread.
+  const deduped = Array.from(new Map(messages.map((m) => [m.id, m])).values());
   const displayMessages = (
     q
-      ? messages.filter(
+      ? deduped.filter(
           (m) =>
             m.kind === "text" &&
             !m.deleted_at &&
             (m.body ?? "").toLowerCase().includes(q)
         )
-      : messages
-  ).filter(notExpired);
+      : deduped
+  )
+    .filter(notExpired)
+    .sort(
+      (a, b) =>
+        a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id)
+    );
 
   return (
     <div
