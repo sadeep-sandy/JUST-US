@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/client";
 import { getWallpaperKey, wallpaperBackground } from "@/lib/theme";
@@ -236,14 +236,22 @@ export default function ChatRoom({
   }, []);
 
   // ---- Disappearing messages: purge expired on load + periodically ----
+  // Drops both expiry-stamped messages and anything older than the window
+  // (so messages from before the setting was enabled also clear).
   useEffect(() => {
     if (disappearSeconds <= 0) return;
-    const purge = () =>
-      supabase.rpc("purge_expired", { p_couple: coupleId }).then(() => {
-        setMessages((prev) =>
-          prev.filter((m) => !m.expires_at || new Date(m.expires_at) > new Date())
-        );
-      });
+    const trim = () => {
+      const now = Date.now();
+      const cutoff = now - disappearSeconds * 1000;
+      setMessages((prev) =>
+        prev.filter((m) => {
+          if (m.expires_at && new Date(m.expires_at).getTime() <= now) return false;
+          if (new Date(m.created_at).getTime() < cutoff) return false;
+          return true;
+        })
+      );
+    };
+    const purge = () => supabase.rpc("purge_expired", { p_couple: coupleId }).then(trim);
     purge();
     const interval = setInterval(purge, 30000);
     return () => clearInterval(interval);
@@ -348,8 +356,15 @@ export default function ChatRoom({
 
   const q = query.trim().toLowerCase();
   const now = Date.now();
-  const notExpired = (m: Message) =>
-    !m.expires_at || new Date(m.expires_at).getTime() > now;
+  // When disappearing is on, hide ANY message older than the window — including
+  // ones sent before it was enabled (which never got an expiry stamp). This is
+  // what makes "1 day" actually clear yesterday's clutter.
+  const ageCutoff = disappearSeconds > 0 ? now - disappearSeconds * 1000 : null;
+  const notExpired = (m: Message) => {
+    if (m.expires_at && new Date(m.expires_at).getTime() <= now) return false;
+    if (ageCutoff !== null && new Date(m.created_at).getTime() < ageCutoff) return false;
+    return true;
+  };
   // De-duplicate by id (realtime can redeliver) and always show messages in true
   // chronological order, so a late/out-of-order arrival can never jump into the
   // middle of the thread.
@@ -438,20 +453,32 @@ export default function ChatRoom({
             <p className="mt-1 text-sm">This is the beginning of your private chat 💜</p>
           </div>
         )}
-        {displayMessages.map((m) => (
-          <MessageBubble
-            key={m.id}
-            message={m}
-            mine={m.sender_id === meId}
-            reactions={reactions[m.id] ?? []}
-            meId={meId}
-            repliedTo={m.reply_to ? messageById.get(m.reply_to) ?? null : null}
-            onReact={(emoji) => toggleReaction(m.id, emoji)}
-            onReply={() => setReplyingTo(m)}
-            onEdit={() => setEditing(m)}
-            onDelete={() => deleteMessage(m.id)}
-          />
-        ))}
+        {displayMessages.map((m, i) => {
+          const prev = displayMessages[i - 1];
+          const newDay = !prev || dayKey(prev.created_at) !== dayKey(m.created_at);
+          return (
+            <Fragment key={m.id}>
+              {newDay && (
+                <div className="flex justify-center py-2">
+                  <span className="rounded-full bg-neutral-200/90 px-3 py-1 text-xs font-medium text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300">
+                    {dayLabel(m.created_at)}
+                  </span>
+                </div>
+              )}
+              <MessageBubble
+                message={m}
+                mine={m.sender_id === meId}
+                reactions={reactions[m.id] ?? []}
+                meId={meId}
+                repliedTo={m.reply_to ? messageById.get(m.reply_to) ?? null : null}
+                onReact={(emoji) => toggleReaction(m.id, emoji)}
+                onReply={() => setReplyingTo(m)}
+                onEdit={() => setEditing(m)}
+                onDelete={() => deleteMessage(m.id)}
+              />
+            </Fragment>
+          );
+        })}
         {partnerTyping && (
           <div className="inline-flex items-center gap-1 rounded-3xl rounded-bl-md bg-neutral-100 px-4 py-3 dark:bg-neutral-800">
             <Dot /> <Dot delay="150ms" /> <Dot delay="300ms" />
@@ -475,6 +502,23 @@ export default function ChatRoom({
     <GameModal game={game} partnerName={partnerName} />
     </div>
   );
+}
+
+// A day bucket key (local) so messages from the same calendar day group together.
+function dayKey(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+}
+
+// A friendly divider label: Today / Yesterday / e.g. "Mon, Jun 23".
+function dayLabel(iso: string): string {
+  const d = new Date(iso);
+  const startOf = (x: Date) =>
+    new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const diff = Math.round((startOf(new Date()) - startOf(d)) / 86400000);
+  if (diff === 0) return "Today";
+  if (diff === 1) return "Yesterday";
+  return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
 }
 
 function Dot({ delay = "0ms" }: { delay?: string }) {
