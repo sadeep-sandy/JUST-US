@@ -1748,8 +1748,10 @@ function LuBoard({ game, partnerName }: { game: CoupleGame; partnerName: string 
             top: `${6 * pct}%`,
             width: `${3 * pct}%`,
             height: `${3 * pct}%`,
+            // Triangles point to each home: right=yellow, bottom=green,
+            // left=red, top=blue — matching the home lanes and corner bases.
             background:
-              "conic-gradient(from 45deg, #ef4444 0 90deg, #facc15 90deg 180deg, #22c55e 180deg 270deg, #3b82f6 270deg 360deg)",
+              "conic-gradient(from 45deg, #facc15 0 90deg, #22c55e 90deg 180deg, #ef4444 180deg 270deg, #3b82f6 270deg 360deg)",
           }}
         />
 
