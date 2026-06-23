@@ -13,11 +13,13 @@ import { createClient } from "@/lib/supabase/client";
 // move handlers, and a <Board> renderer. Everything else is shared.
 // ---------------------------------------------------------------------------
 
-export type GameId = "ttt" | "rps" | "c4" | "db" | "mem";
+export type GameId = "ttt" | "rps" | "c4" | "db" | "mem" | "ck" | "bs";
 
 export const GAMES: { id: GameId; name: string; emoji: string; blurb: string }[] = [
   { id: "ttt", name: "Tic-Tac-Toe", emoji: "⭕", blurb: "Classic 3-in-a-row" },
   { id: "c4", name: "Connect Four", emoji: "🔴", blurb: "Drop 4 in a row" },
+  { id: "ck", name: "Checkers", emoji: "♟️", blurb: "Jump and crown kings" },
+  { id: "bs", name: "Battleship", emoji: "🚢", blurb: "Sink the hidden fleet" },
   { id: "db", name: "Dots & Boxes", emoji: "🔳", blurb: "Close boxes to score" },
   { id: "mem", name: "Memory Match", emoji: "🧠", blurb: "Find the pairs" },
   { id: "rps", name: "Rock Paper Scissors", emoji: "✊", blurb: "Quick best-of throws" },
@@ -42,6 +44,14 @@ const dbVIndex = (r: number, c: number) => r * DB_DOTS + c; //  r:0..DB_BOXES-1
 // Memory Match: pairs of emoji cards laid out from a shared seed.
 const MEM_PAIRS = 6;
 const MEM_FACES = ["🐶", "🐱", "🦊", "🐼", "🦁", "🐸", "🐵", "🐰", "🐯", "🐨"];
+
+// Checkers: 8×8 board, dark squares only. a/A = seat A man/king, b/B = seat B.
+const CK_N = 8;
+type CkPiece = "" | "a" | "A" | "b" | "B";
+
+// Battleship: each player hides a fleet on their own secret grid.
+const BS_N = 6;
+const BS_SHIPS = [3, 2, 2];
 
 const LINES = [
   [0, 1, 2], [3, 4, 5], [6, 7, 8],
@@ -107,6 +117,120 @@ function memDeck(seed: number): string[] {
   return cards;
 }
 
+// ---- Checkers helpers ----
+function ckInitBoard(): CkPiece[] {
+  const b: CkPiece[] = Array(CK_N * CK_N).fill("");
+  for (let r = 0; r < CK_N; r++) {
+    for (let c = 0; c < CK_N; c++) {
+      if ((r + c) % 2 === 1) {
+        if (r < 3) b[r * CK_N + c] = "b"; // seat B at the top
+        else if (r > 4) b[r * CK_N + c] = "a"; // seat A at the bottom
+      }
+    }
+  }
+  return b;
+}
+const ckOwner = (p: CkPiece): Seat | null =>
+  p === "a" || p === "A" ? "A" : p === "b" || p === "B" ? "B" : null;
+const ckKing = (p: CkPiece) => p === "A" || p === "B";
+function ckDirs(p: CkPiece): number[][] {
+  if (ckKing(p)) return [[-1, -1], [-1, 1], [1, -1], [1, 1]];
+  return ckOwner(p) === "A" ? [[-1, -1], [-1, 1]] : [[1, -1], [1, 1]];
+}
+const ckIn = (r: number, c: number) => r >= 0 && r < CK_N && c >= 0 && c < CK_N;
+
+// Legal destinations for one piece; if it can jump, only jumps are returned.
+function ckMoves(b: CkPiece[], idx: number): { to: number; cap: number | null }[] {
+  const p = b[idx];
+  const owner = ckOwner(p);
+  if (!owner) return [];
+  const r = Math.floor(idx / CK_N);
+  const c = idx % CK_N;
+  const steps: { to: number; cap: number | null }[] = [];
+  const jumps: { to: number; cap: number | null }[] = [];
+  for (const [dr, dc] of ckDirs(p)) {
+    const r1 = r + dr;
+    const c1 = c + dc;
+    if (!ckIn(r1, c1)) continue;
+    const i1 = r1 * CK_N + c1;
+    if (b[i1] === "") {
+      steps.push({ to: i1, cap: null });
+    } else if (ckOwner(b[i1]) && ckOwner(b[i1]) !== owner) {
+      const r2 = r + 2 * dr;
+      const c2 = c + 2 * dc;
+      if (ckIn(r2, c2) && b[r2 * CK_N + c2] === "") {
+        jumps.push({ to: r2 * CK_N + c2, cap: i1 });
+      }
+    }
+  }
+  return jumps.length ? jumps : steps;
+}
+
+function applyCkMove(prev: GState, from: number, to: number): GState {
+  if (prev.ckResult) return prev;
+  const b = prev.ckBoard.slice();
+  const p = b[from];
+  if (ckOwner(p) !== prev.ckTurn) return prev;
+  if (prev.ckMust !== null && prev.ckMust !== from) return prev;
+  const mv = ckMoves(b, from).find((m) => m.to === to);
+  if (!mv) return prev;
+  b[to] = p;
+  b[from] = "";
+  if (mv.cap !== null) b[mv.cap] = "";
+  // Promote on reaching the far row.
+  const r2 = Math.floor(to / CK_N);
+  if (b[to] === "a" && r2 === 0) b[to] = "A";
+  if (b[to] === "b" && r2 === CK_N - 1) b[to] = "B";
+
+  let must: number | null = null;
+  let turn = prev.ckTurn;
+  if (mv.cap !== null && ckMoves(b, to).some((m) => m.cap !== null)) {
+    must = to; // same piece must keep jumping
+  } else {
+    turn = prev.ckTurn === "A" ? "B" : "A";
+  }
+
+  let result: Seat | null = null;
+  if (must === null) {
+    const oppHasPieces = b.some((x) => ckOwner(x) === turn);
+    const oppHasMoves = b.some((x, i) => ckOwner(x) === turn && ckMoves(b, i).length > 0);
+    if (!oppHasPieces || !oppHasMoves) result = prev.ckTurn;
+  }
+  return { ...prev, ckBoard: b, ckTurn: turn, ckMust: must, ckResult: result };
+}
+
+// ---- Battleship helpers ----
+function bsRandomBoard(): number[] {
+  const b = Array(BS_N * BS_N).fill(0);
+  let id = 1;
+  for (const len of BS_SHIPS) {
+    for (let tries = 0; tries < 300; tries++) {
+      const horiz = Math.random() < 0.5;
+      const r = Math.floor(Math.random() * BS_N);
+      const c = Math.floor(Math.random() * BS_N);
+      const cells: number[] = [];
+      let ok = true;
+      for (let k = 0; k < len; k++) {
+        const rr = horiz ? r : r + k;
+        const cc = horiz ? c + k : c;
+        if (rr >= BS_N || cc >= BS_N || b[rr * BS_N + cc] !== 0) {
+          ok = false;
+          break;
+        }
+        cells.push(rr * BS_N + cc);
+      }
+      if (ok) {
+        cells.forEach((i) => (b[i] = id));
+        break;
+      }
+    }
+    id++;
+  }
+  return b;
+}
+const bsAllSunk = (board: number[], incoming: boolean[]) =>
+  board.every((v, i) => v === 0 || incoming[i]);
+
 interface GState {
   phase: Phase;
   game: GameId | null;
@@ -138,6 +262,19 @@ interface GState {
   memFlipped: number[];
   memSeat: Seat | null;
   memTurn: Seat;
+  // checkers
+  ckBoard: CkPiece[];
+  ckSeat: Seat | null;
+  ckTurn: Seat;
+  ckMust: number | null;
+  ckResult: Seat | null;
+  // battleship (own board is secret; only this device knows bsBoard)
+  bsBoard: number[];
+  bsIncoming: boolean[];
+  bsShots: ("hit" | "miss" | null)[];
+  bsSeat: Seat | null;
+  bsTurn: Seat;
+  bsResult: Seat | null;
   // shared
   declined: boolean;
 }
@@ -168,6 +305,17 @@ const FRESH = (): GState => ({
   memFlipped: [],
   memSeat: null,
   memTurn: "A",
+  ckBoard: [],
+  ckSeat: null,
+  ckTurn: "A",
+  ckMust: null,
+  ckResult: null,
+  bsBoard: Array(BS_N * BS_N).fill(0),
+  bsIncoming: Array(BS_N * BS_N).fill(false),
+  bsShots: Array(BS_N * BS_N).fill(null),
+  bsSeat: null,
+  bsTurn: "A",
+  bsResult: null,
   declined: false,
 });
 
@@ -179,6 +327,10 @@ function makeState(phase: Phase, game: GameId, role: "host" | "guest"): GState {
   if (game === "c4") return { ...base, c4Disc: role === "host" ? "R" : "Y", c4Turn: "R" };
   if (game === "db") return { ...base, dbSeat: role === "host" ? "A" : "B", dbTurn: "A" };
   if (game === "mem") return { ...base, memSeat: role === "host" ? "A" : "B", memTurn: "A" };
+  if (game === "ck")
+    return { ...base, ckBoard: ckInitBoard(), ckSeat: role === "host" ? "A" : "B", ckTurn: "A" };
+  if (game === "bs")
+    return { ...base, bsBoard: bsRandomBoard(), bsSeat: role === "host" ? "A" : "B", bsTurn: "A" };
   return base;
 }
 
@@ -188,6 +340,8 @@ function roleOf(p: GState): "host" | "guest" {
   if (p.game === "c4") return p.c4Disc === "R" ? "host" : "guest";
   if (p.game === "db") return p.dbSeat === "A" ? "host" : "guest";
   if (p.game === "mem") return p.memSeat === "A" ? "host" : "guest";
+  if (p.game === "ck") return p.ckSeat === "A" ? "host" : "guest";
+  if (p.game === "bs") return p.bsSeat === "A" ? "host" : "guest";
   return p.myMark === "X" ? "host" : "guest";
 }
 
@@ -308,6 +462,17 @@ export interface CoupleGame {
   memFlipped: number[];
   memSeat: Seat | null;
   memTurn: Seat;
+  ckBoard: CkPiece[];
+  ckSeat: Seat | null;
+  ckTurn: Seat;
+  ckMust: number | null;
+  ckResult: Seat | null;
+  bsIncoming: boolean[];
+  bsBoard: number[];
+  bsShots: ("hit" | "miss" | null)[];
+  bsSeat: Seat | null;
+  bsTurn: Seat;
+  bsResult: Seat | null;
   declined: boolean;
   open: () => void;
   choose: (game: GameId) => void;
@@ -320,6 +485,8 @@ export interface CoupleGame {
   tapDbEdge: (kind: "h" | "v", idx: number) => void;
   flipMem: (i: number) => void;
   resolveMem: () => void;
+  playCk: (from: number, to: number) => void;
+  fireBs: (i: number) => void;
   nextRound: () => void;
   rematch: () => void;
   close: () => void;
@@ -399,6 +566,44 @@ export function useCoupleGame(coupleId: string, meId: string): CoupleGame {
         if (typeof i !== "number") return;
         setState((p) => (p.phase === "playing" && p.game === "mem" ? applyMemFlip(p, i) : p));
       })
+      .on("broadcast", { event: "ck_move" }, ({ payload }) => {
+        const from = payload?.from as number;
+        const to = payload?.to as number;
+        if (typeof from !== "number" || typeof to !== "number") return;
+        setState((p) => (p.phase === "playing" && p.game === "ck" ? applyCkMove(p, from, to) : p));
+      })
+      .on("broadcast", { event: "bs_fire" }, ({ payload }) => {
+        // The partner fired at MY secret board; mark it and reply with the result.
+        const i = payload?.i as number;
+        if (typeof i !== "number") return;
+        const p = stateRef.current;
+        if (p.game !== "bs" || p.phase !== "playing" || p.bsResult || p.bsIncoming[i]) return;
+        const incoming = p.bsIncoming.slice();
+        incoming[i] = true;
+        const hit = p.bsBoard[i] !== 0;
+        const lost = bsAllSunk(p.bsBoard, incoming);
+        const firer: Seat = p.bsSeat === "A" ? "B" : "A";
+        setState((q) => ({
+          ...q,
+          bsIncoming: incoming,
+          bsTurn: p.bsSeat!,
+          bsResult: lost ? firer : q.bsResult,
+        }));
+        send("bs_result", { i, hit, lost });
+      })
+      .on("broadcast", { event: "bs_result" }, ({ payload }) => {
+        // Result of MY shot on the partner's board.
+        const i = payload?.i as number;
+        const hit = Boolean(payload?.hit);
+        const lost = Boolean(payload?.lost);
+        if (typeof i !== "number") return;
+        setState((p) => {
+          if (p.game !== "bs") return p;
+          const shots = p.bsShots.slice();
+          shots[i] = hit ? "hit" : "miss";
+          return { ...p, bsShots: shots, bsResult: lost ? p.bsSeat : p.bsResult };
+        });
+      })
       .on("broadcast", { event: "rps_next" }, () => {
         setState((p) =>
           p.game === "rps"
@@ -408,7 +613,13 @@ export function useCoupleGame(coupleId: string, meId: string): CoupleGame {
       })
       .on("broadcast", { event: "rematch" }, ({ payload }) => {
         setState((p) => {
-          if (p.game === "ttt" || p.game === "c4" || p.game === "db") {
+          if (
+            p.game === "ttt" ||
+            p.game === "c4" ||
+            p.game === "db" ||
+            p.game === "ck" ||
+            p.game === "bs"
+          ) {
             return makeState("playing", p.game, roleOf(p));
           }
           if (p.game === "mem") {
@@ -532,6 +743,30 @@ export function useCoupleGame(coupleId: string, meId: string): CoupleGame {
     setState((p) => applyMemResolve(p));
   }, []);
 
+  const playCk = useCallback(
+    (from: number, to: number) => {
+      const s = stateRef.current;
+      if (s.phase !== "playing" || s.game !== "ck" || s.ckResult || s.ckTurn !== s.ckSeat) return;
+      const next = applyCkMove(s, from, to);
+      if (next === s) return; // illegal
+      setState(next);
+      send("ck_move", { from, to });
+    },
+    [send]
+  );
+
+  const fireBs = useCallback(
+    (i: number) => {
+      const s = stateRef.current;
+      if (s.phase !== "playing" || s.game !== "bs" || s.bsResult) return;
+      if (s.bsSeat !== s.bsTurn || s.bsShots[i]) return;
+      const opp: Seat = s.bsSeat === "A" ? "B" : "A";
+      setState((p) => ({ ...p, bsTurn: opp })); // hand the turn over; result fills the shot in
+      send("bs_fire", { i });
+    },
+    [send]
+  );
+
   const nextRound = useCallback(() => {
     setState((p) => (p.game === "rps" ? { ...p, myThrow: null, theirThrow: null, scored: false } : p));
     send("rps_next");
@@ -545,7 +780,13 @@ export function useCoupleGame(coupleId: string, meId: string): CoupleGame {
       send("rematch", { seed });
       return;
     }
-    if (p.game === "ttt" || p.game === "c4" || p.game === "db") {
+    if (
+      p.game === "ttt" ||
+      p.game === "c4" ||
+      p.game === "db" ||
+      p.game === "ck" ||
+      p.game === "bs"
+    ) {
       setState(makeState("playing", p.game, roleOf(p)));
       send("rematch");
     }
@@ -582,6 +823,17 @@ export function useCoupleGame(coupleId: string, meId: string): CoupleGame {
     memFlipped: state.memFlipped,
     memSeat: state.memSeat,
     memTurn: state.memTurn,
+    ckBoard: state.ckBoard,
+    ckSeat: state.ckSeat,
+    ckTurn: state.ckTurn,
+    ckMust: state.ckMust,
+    ckResult: state.ckResult,
+    bsBoard: state.bsBoard,
+    bsIncoming: state.bsIncoming,
+    bsShots: state.bsShots,
+    bsSeat: state.bsSeat,
+    bsTurn: state.bsTurn,
+    bsResult: state.bsResult,
     declined: state.declined,
     open,
     choose,
@@ -594,6 +846,8 @@ export function useCoupleGame(coupleId: string, meId: string): CoupleGame {
     tapDbEdge,
     flipMem,
     resolveMem,
+    playCk,
+    fireBs,
     nextRound,
     rematch,
     close,
@@ -687,6 +941,12 @@ export default function GameModal({
         )}
         {phase === "playing" && game.game === "mem" && (
           <MemBoard game={game} partnerName={partnerName} />
+        )}
+        {phase === "playing" && game.game === "ck" && (
+          <CkBoard game={game} partnerName={partnerName} />
+        )}
+        {phase === "playing" && game.game === "bs" && (
+          <BsBoard game={game} partnerName={partnerName} />
         )}
         {phase === "playing" && game.game === "rps" && (
           <RpsBoard game={game} partnerName={partnerName} />
@@ -997,6 +1257,182 @@ function MemBoard({ game, partnerName }: { game: CoupleGame; partnerName: string
       <div className="mt-5 flex gap-3">
         <Btn variant="ghost" onClick={game.close}>Close</Btn>
         {done && <Btn variant="primary" onClick={game.rematch}>Play again</Btn>}
+      </div>
+    </div>
+  );
+}
+
+function CkBoard({ game, partnerName }: { game: CoupleGame; partnerName: string }) {
+  const { ckBoard, ckSeat, ckTurn, ckMust, ckResult } = game;
+  const [localSel, setLocalSel] = useState<number | null>(null);
+  const myTurn = !ckResult && ckTurn === ckSeat;
+  const sel = ckMust !== null ? ckMust : localSel;
+  const dests = sel !== null && myTurn ? ckMoves(ckBoard, sel).map((m) => m.to) : [];
+
+  let status: string;
+  let tone = "text-neutral-500";
+  if (ckResult) {
+    const iWon = ckResult === ckSeat;
+    status = iWon ? "You win! 🎉" : `${partnerName} wins 😄`;
+    tone = iWon ? "text-emerald-500" : "text-fuchsia-500";
+  } else if (myTurn) {
+    status = ckMust !== null ? "Keep jumping!" : "Your turn";
+    tone = "text-emerald-500";
+  } else {
+    status = `${partnerName}’s turn…`;
+  }
+
+  const flip = ckSeat === "B"; // each player sees their own pieces at the bottom
+  const onTap = (abs: number) => {
+    if (!myTurn) return;
+    if (ckMust === null && ckOwner(ckBoard[abs]) === ckSeat) {
+      setLocalSel(abs);
+      return;
+    }
+    if (sel !== null && dests.includes(abs)) {
+      game.playCk(sel, abs);
+      setLocalSel(null);
+    }
+  };
+
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between">
+        <p className="font-semibold text-neutral-900 dark:text-neutral-100">Checkers</p>
+        <p className="text-xs text-neutral-400">
+          You are{" "}
+          <span className={ckSeat === "A" ? "text-red-500" : "text-neutral-500"}>
+            {ckSeat === "A" ? "Red" : "White"}
+          </span>
+        </p>
+      </div>
+      <p className={`mb-3 text-sm font-medium ${tone}`}>{status}</p>
+
+      <div className="mx-auto grid w-full max-w-[300px] grid-cols-8 overflow-hidden rounded-lg">
+        {Array.from({ length: CK_N * CK_N }).map((_, d) => {
+          const abs = flip ? CK_N * CK_N - 1 - d : d;
+          const r = Math.floor(abs / CK_N);
+          const c = abs % CK_N;
+          const dark = (r + c) % 2 === 1;
+          const piece = ckBoard[abs];
+          const owner = ckOwner(piece);
+          return (
+            <button
+              key={d}
+              type="button"
+              disabled={!myTurn}
+              onClick={() => onTap(abs)}
+              className={`relative flex aspect-square items-center justify-center ${
+                dark ? "bg-amber-800/80" : "bg-amber-200"
+              } ${sel === abs ? "ring-2 ring-inset ring-emerald-400" : ""}`}
+            >
+              {owner && (
+                <span
+                  className={`flex h-[76%] w-[76%] items-center justify-center rounded-full text-xs shadow ${
+                    owner === "A"
+                      ? "bg-red-500 text-amber-100"
+                      : "bg-neutral-100 text-amber-700"
+                  }`}
+                >
+                  {ckKing(piece) ? "♛" : ""}
+                </span>
+              )}
+              {dests.includes(abs) && (
+                <span className="absolute h-2.5 w-2.5 rounded-full bg-emerald-400/90" />
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="mt-5 flex gap-3">
+        <Btn variant="ghost" onClick={game.close}>Close</Btn>
+        {ckResult && <Btn variant="primary" onClick={game.rematch}>Play again</Btn>}
+      </div>
+    </div>
+  );
+}
+
+function BsBoard({ game, partnerName }: { game: CoupleGame; partnerName: string }) {
+  const { bsBoard, bsIncoming, bsShots, bsSeat, bsTurn, bsResult } = game;
+  const myTurn = !bsResult && bsSeat === bsTurn;
+
+  let status: string;
+  let tone = "text-neutral-500";
+  if (bsResult) {
+    const iWon = bsResult === bsSeat;
+    status = iWon ? "You sank their fleet! 🎉" : `${partnerName} sank your fleet 😬`;
+    tone = iWon ? "text-emerald-500" : "text-fuchsia-500";
+  } else if (myTurn) {
+    status = "Your turn — fire!";
+    tone = "text-emerald-500";
+  } else {
+    status = `${partnerName} is aiming…`;
+  }
+
+  const myShipsLeft = bsBoard.filter((v, i) => v !== 0 && !bsIncoming[i]).length;
+  const enemyHits = bsShots.filter((s) => s === "hit").length;
+
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between">
+        <p className="font-semibold text-neutral-900 dark:text-neutral-100">Battleship</p>
+        <p className="text-xs text-neutral-400">🎯 {enemyHits} hits</p>
+      </div>
+      <p className={`mb-3 text-sm font-medium ${tone}`}>{status}</p>
+
+      <p className="mb-1 text-xs font-medium text-neutral-500">Enemy waters — tap to fire</p>
+      <div className="mx-auto mb-4 grid max-w-[260px] grid-cols-6 gap-1">
+        {Array.from({ length: BS_N * BS_N }).map((_, i) => {
+          const sh = bsShots[i];
+          return (
+            <button
+              key={i}
+              type="button"
+              disabled={!myTurn || Boolean(sh)}
+              onClick={() => game.fireBs(i)}
+              aria-label="Fire here"
+              className={`grid aspect-square place-items-center rounded text-sm transition active:scale-95 ${
+                sh === "hit"
+                  ? "bg-red-500 text-white"
+                  : sh === "miss"
+                    ? "bg-neutral-300 dark:bg-neutral-700"
+                    : "bg-sky-200 active:bg-sky-300 dark:bg-sky-900/60"
+              }`}
+            >
+              {sh === "hit" ? "💥" : sh === "miss" ? "•" : ""}
+            </button>
+          );
+        })}
+      </div>
+
+      <p className="mb-1 text-xs font-medium text-neutral-500">Your fleet · {myShipsLeft} cells left</p>
+      <div className="mx-auto grid max-w-[170px] grid-cols-6 gap-0.5">
+        {Array.from({ length: BS_N * BS_N }).map((_, i) => {
+          const ship = bsBoard[i] !== 0;
+          const hit = bsIncoming[i];
+          return (
+            <span
+              key={i}
+              className={`grid aspect-square place-items-center rounded-sm text-[10px] ${
+                hit
+                  ? ship
+                    ? "bg-red-500"
+                    : "bg-neutral-400"
+                  : ship
+                    ? "bg-slate-500"
+                    : "bg-sky-100 dark:bg-sky-900/40"
+              }`}
+            >
+              {hit ? (ship ? "💥" : "•") : ""}
+            </span>
+          );
+        })}
+      </div>
+
+      <div className="mt-5 flex gap-3">
+        <Btn variant="ghost" onClick={game.close}>Close</Btn>
+        {bsResult && <Btn variant="primary" onClick={game.rematch}>Play again</Btn>}
       </div>
     </div>
   );
